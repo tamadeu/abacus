@@ -1,0 +1,16 @@
+# Rust
+/target/
+
+# Node
+node_modules
+dist
+*.local
+
+# Tauri
+apps/desktop/src-tauri/gen/schemas
+
+# Editores e sistema
+.idea
+.vscode/*
+.DS_Store
+*.log

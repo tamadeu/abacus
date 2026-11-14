@@ -1,0 +1,112 @@
+:root {
+  --ink: #1b1b29;
+  --muted: #5b5b6b;
+  --line: #e4e4ec;
+  --surface: #f6f6fa;
+  --accent: #4f46e5;
+  font-family: Inter, system-ui, -apple-system, "Segoe UI", sans-serif;
+  font-size: 14px;
+  color: var(--ink);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  display: flex;
+  flex-direction: column;
+  background: #fff;
+}
+
+.titlebar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--line);
+  background: #fbfbfd;
+}
+
+.logo {
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 20px;
+  font-weight: 700;
+}
+
+.titlebar h1 {
+  margin: 0;
+  font-size: 16px;
+}
+
+.titlebar p {
+  margin: 0;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.formula-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 16px;
+}
+
+#name-box {
+  min-width: 72px;
+  padding: 6px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  font-weight: 500;
+}
+
+.formula-bar label {
+  font-style: italic;
+  color: var(--muted);
+}
+
+#fx {
+  flex: 1;
+  min-width: 0;
+  padding: 6px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  font: inherit;
+  color: inherit;
+}
+
+#fx:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
+}
+
+#grid-wrap {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+}
+
+#grid {
+  display: block;
+  outline: none;
+}
+
+footer {
+  padding: 6px 16px;
+  font-size: 12px;
+  color: var(--muted);
+}

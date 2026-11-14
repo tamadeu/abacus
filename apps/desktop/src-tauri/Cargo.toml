@@ -1,0 +1,21 @@
+[package]
+name = "abacus-desktop"
+description = "Ábaco para desktop"
+version.workspace = true
+edition.workspace = true
+repository.workspace = true
+
+[lib]
+# O sufixo `_lib` evita conflito entre o nome da biblioteca e o do binário
+# no Windows: https://github.com/rust-lang/cargo/issues/8519
+name = "abacus_desktop_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+abacus-core = { path = "../../../crates/abacus-core" }
+abacus-formula = { path = "../../../crates/abacus-formula" }
+serde = { version = "1", features = ["derive"] }
+tauri = { version = "2", features = [] }

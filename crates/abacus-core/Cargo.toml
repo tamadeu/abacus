@@ -1,0 +1,6 @@
+[package]
+name = "abacus-core"
+description = "Modelo de dados do Ábaco: referências, valores, planilhas e pastas de trabalho."
+version.workspace = true
+edition.workspace = true
+repository.workspace = true

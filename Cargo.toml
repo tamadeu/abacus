@@ -1,0 +1,20 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/abacus-core",
+    "crates/abacus-formula",
+    "apps/desktop/src-tauri",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+repository = "https://github.com/tamadeu/abacus"
+
+# Perfil de release recomendado pelo Tauri: https://tauri.app/concept/size/
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = 3
+panic = "abort"
+strip = true
