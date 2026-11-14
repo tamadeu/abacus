@@ -21,11 +21,13 @@ export interface Engine {
   setCell(col: number, row: number, input: string): Promise<void>;
   /** Células preenchidas dentro da janela visível, já calculadas. */
   view(firstCol: number, firstRow: number, cols: number, rows: number): Promise<CellView[]>;
+  undo(): Promise<void>;
+  redo(): Promise<void>;
 }
 
-/** Motor em Rust, chamado pelos comandos do Tauri. */
+/** Motor IronCalc, em Rust, chamado pelos comandos do Tauri. */
 class TauriEngine implements Engine {
-  readonly label = "Planilha1";
+  readonly label = "Motor de cálculo: IronCalc";
 
   setCell(col: number, row: number, input: string): Promise<void> {
     return invoke("set_cell", { col, row, input });
@@ -34,11 +36,20 @@ class TauriEngine implements Engine {
   view(firstCol: number, firstRow: number, cols: number, rows: number): Promise<CellView[]> {
     return invoke("get_view", { firstCol, firstRow, cols, rows });
   }
+
+  undo(): Promise<void> {
+    return invoke("undo");
+  }
+
+  redo(): Promise<void> {
+    return invoke("redo");
+  }
 }
 
 /**
  * Substituto usado quando a interface roda no navegador (`npm run dev`),
- * fora do Tauri. Guarda o que foi digitado, mas não calcula fórmulas.
+ * fora do Tauri. Guarda o que foi digitado, mas não calcula fórmulas nem
+ * desfaz edições.
  */
 class PreviewEngine implements Engine {
   readonly label = "Pré-visualização no navegador (sem motor de cálculo)";
@@ -59,6 +70,10 @@ class PreviewEngine implements Engine {
       (c) => c.col >= firstCol && c.col < firstCol + cols && c.row >= firstRow && c.row < firstRow + rows,
     );
   }
+
+  async undo(): Promise<void> {}
+
+  async redo(): Promise<void> {}
 }
 
 export function createEngine(): Engine {

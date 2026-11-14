@@ -15,7 +15,6 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-abacus-core = { path = "../../../crates/abacus-core" }
-abacus-formula = { path = "../../../crates/abacus-formula" }
+ironcalc = "0.9.1"
 serde = { version = "1", features = ["derive"] }
 tauri = { version = "2", features = [] }

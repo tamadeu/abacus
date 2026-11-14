@@ -190,6 +190,17 @@ async function commit(moveCols: number, moveRows: number) {
   await select(selection.col + moveCols, selection.row + moveRows);
 }
 
+/** Desfaz ou refaz a última edição e redesenha. */
+async function history(action: "undo" | "redo") {
+  try {
+    await engine[action]();
+  } catch (error) {
+    statusEl.textContent = `Erro ao ${action === "undo" ? "desfazer" : "refazer"}: ${error}`;
+    return;
+  }
+  await refresh();
+}
+
 canvas.addEventListener("mousedown", (event) => {
   const bounds = canvas.getBoundingClientRect();
   const px = event.clientX - bounds.left;
@@ -230,7 +241,14 @@ canvas.addEventListener("keydown", (event) => {
     Tab: [event.shiftKey ? -1 : 1, 0],
   };
   const move = moves[event.key];
-  if (move) {
+  const shortcut = event.ctrlKey || event.metaKey;
+  if (shortcut && event.key.toLowerCase() === "z") {
+    event.preventDefault();
+    void history(event.shiftKey ? "redo" : "undo");
+  } else if (shortcut && event.key.toLowerCase() === "y") {
+    event.preventDefault();
+    void history("redo");
+  } else if (move) {
     event.preventDefault();
     void select(selection.col + move[0], selection.row + move[1]);
   } else if (event.key === "Enter" || event.key === "F2") {

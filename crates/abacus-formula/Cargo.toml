@@ -1,9 +1,0 @@
-[package]
-name = "abacus-formula"
-description = "Motor de fórmulas do Ábaco: analisador sintático e avaliador."
-version.workspace = true
-edition.workspace = true
-repository.workspace = true
-
-[dependencies]
-abacus-core = { path = "../abacus-core" }

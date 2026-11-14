@@ -1,9 +1,10 @@
 # Ábaco
 
-Suíte de escritório de código aberto, começando pela planilha. O núcleo é
-escrito em Rust e o aplicativo desktop usa [Tauri](https://tauri.app).
+Suíte de escritório de código aberto, começando pela planilha. O aplicativo
+desktop usa [Tauri](https://tauri.app) e o motor de cálculo é o
+[IronCalc](https://www.ironcalc.com), ambos em Rust.
 
-![Ábaco com valores, fórmulas e um erro de divisão por zero](docs/screenshot.png)
+![Ábaco com valores, fórmulas, uma matriz dinâmica e um erro de divisão por zero](docs/screenshot.png)
 
 ## Estado atual
 
@@ -11,25 +12,28 @@ Projeto no início. O que já funciona:
 
 - Grade desenhada em canvas, com seleção por mouse e teclado e rolagem.
 - Edição pela barra de fórmulas (Enter, Tab e Esc).
-- Números no padrão brasileiro (`18.500,00`, `R$ 9.200,00`).
-- Fórmulas com `+ - * / ^`, parênteses, referências (`=B3-C3`) e intervalos.
-- Funções `SOMA`, `MÉDIA`, `MÁXIMO`, `MÍNIMO` e `CONT.NÚM`, com os nomes em
-  inglês como sinônimos.
-- Erros `#DIV/0!`, `#VALOR!`, `#NOME?` e detecção de referência circular.
+- Desfazer e refazer (Ctrl+Z, Ctrl+Y).
+- As fórmulas e funções do IronCalc, incluindo `LET`, `LAMBDA` e matrizes
+  dinâmicas.
 
-Ainda não há leitura ou gravação de arquivos: a planilha vive só na memória.
+Limitações conhecidas:
+
+- O IronCalc 0.9 ainda não tem português. Os números usam a localidade
+  espanhola, que tem o mesmo formato do Brasil (`18.500,00`, `;` entre
+  argumentos), e os nomes de função ficam em inglês (`SUM`, não `SOMA`).
+  `R$` ainda não é reconhecido como moeda.
+- Ainda não há abrir nem salvar arquivos: a planilha vive só na memória.
 
 ## Estrutura
 
 | Pasta | Conteúdo |
 | --- | --- |
-| `crates/abacus-core` | Modelo de dados: referências, valores, planilhas. Sem dependências. |
-| `crates/abacus-formula` | Analisador sintático e avaliador de fórmulas. |
-| `apps/desktop` | Interface em TypeScript (Vite) e casca Tauri em `src-tauri`. |
+| `apps/desktop/src` | Interface em TypeScript (Vite). |
+| `apps/desktop/src-tauri` | Casca Tauri. `engine.rs` é a ponte com o IronCalc. |
 
 A interface fala com o motor apenas pela interface `Engine`
 (`apps/desktop/src/engine.ts`). Hoje ela chama comandos do Tauri; a versão web
-vai implementar a mesma interface com o núcleo compilado para WebAssembly.
+vai implementar a mesma interface com o IronCalc compilado para WebAssembly.
 
 ## Como rodar
 
@@ -45,7 +49,7 @@ npm run tauri dev
 `npm run dev` abre só a interface no navegador, sem o motor de cálculo, o que
 serve para trabalhar no visual.
 
-Testes do núcleo, a partir da raiz:
+Testes, a partir da raiz:
 
 ```sh
 cargo test
@@ -53,11 +57,11 @@ cargo test
 
 ## Próximos passos
 
-1. Leitura e gravação de `.xlsx`.
-2. Grafo de dependências e recálculo incremental.
-3. Estilos de célula e formatos numéricos (moeda, porcentagem, datas).
-4. Mais funções, texto em fórmulas e referências absolutas (`$A$1`).
-5. Núcleo em WebAssembly para a versão web.
+1. Abrir e salvar `.xlsx` (o IronCalc já lê e grava o formato).
+2. Localidade e nomes de função em português, no IronCalc.
+3. Estilos de célula e formatos numéricos na interface.
+4. Várias planilhas por pasta de trabalho.
+5. Versão web com o motor em WebAssembly.
 
 ## Licença
 
