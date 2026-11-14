@@ -9,7 +9,7 @@ que acrescenta o português do Brasil: nomes de função (`SOMA`, `SE`,
 `PROCV`), erros (`#NOME?`), números e datas no formato brasileiro e `R$`
 como moeda.
 
-![Ábaco com um relatório financeiro aberto de um arquivo .xlsx, um intervalo selecionado e a barra de formatação](docs/screenshot.png)
+![Ábaco com um orçamento aberto de um arquivo .xlsx: título mesclado, tabela com bordas, texto quebrado em linhas e valores em reais](docs/screenshot.png)
 
 ## Estado atual
 
@@ -26,6 +26,11 @@ Projeto no início. O que já funciona:
   (geral, duas casas, moeda, porcentagem), com Ctrl+B, Ctrl+I e Ctrl+U.
 - Larguras de coluna e alturas de linha: vêm do arquivo, mudam arrastando a
   borda do cabeçalho, e dois cliques na borda ajustam a coluna ao conteúdo.
+- Células mescladas, bordas e quebra de texto: aparecem como no arquivo e
+  podem ser aplicadas pela barra de ferramentas. A linha cresce sozinha
+  quando o texto quebrado não cabe.
+- Inserir e excluir linhas e colunas pelo menu do botão direito, que também
+  tem recortar, copiar e colar.
 - Edição direto na célula (digitando, com F2 ou com dois cliques) e pela
   barra de fórmulas; Enter, Tab e as setas gravam, Esc cancela e Delete apaga
   a seleção.
@@ -55,8 +60,11 @@ Limitações conhecidas:
   não há sugestão de nomes de função ao digitar.
 - Clicar para inserir referência só funciona dentro da mesma planilha.
 - Colar para outros programas leva só os valores, sem formatação.
-- Células mescladas, bordas, quebra de texto, tamanho de fonte e gráficos do
-  arquivo ainda não aparecem na grade.
+- Tamanho e tipo de fonte, alinhamento vertical e gráficos do arquivo ainda
+  não aparecem na grade.
+- As bordas aplicadas pela barra são sempre finas e pretas; as do arquivo
+  aparecem com cor e espessura, mas a dupla é desenhada como grossa.
+- Não dá para selecionar uma linha ou coluna inteira clicando no cabeçalho.
 - A seleção não rola a tela ao arrastar o mouse para fora dela.
 - Fechar a janela não avisa sobre alterações não salvas.
 - Arquivos gerados pela biblioteca openpyxl mostram `0` em células vazias que
@@ -97,9 +105,9 @@ cargo test
 
 ## Próximos passos
 
-1. Células mescladas, bordas e quebra de texto.
-2. Inserir e excluir linhas e colunas.
-3. Sugestão de funções ao digitar uma fórmula.
+1. Sugestão de funções ao digitar uma fórmula.
+2. Seleção de linhas e colunas inteiras e rolagem ao arrastar.
+3. Tamanho de fonte e alinhamento vertical.
 4. Propor o português do Brasil ao IronCalc original.
 5. Versão web com o motor em WebAssembly.
 

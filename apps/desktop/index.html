@@ -47,6 +47,18 @@
       <button type="button" data-align="right" aria-label="Alinhar à direita" title="Alinhar à direita">
         <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 6h16M10 12h10M6 18h14" /></svg>
       </button>
+      <button type="button" data-toggle="wrap" title="Quebrar o texto dentro da célula">Quebrar texto</button>
+      <button type="button" id="merge-btn" title="Mesclar e centralizar; clique de novo para desfazer">Mesclar</button>
+      <select id="borders" aria-label="Bordas" title="Bordas">
+        <option value="" selected>Bordas</option>
+        <option value="all">Todas</option>
+        <option value="outer">Contorno</option>
+        <option value="top">Superior</option>
+        <option value="bottom">Inferior</option>
+        <option value="left">Esquerda</option>
+        <option value="right">Direita</option>
+        <option value="none">Nenhuma</option>
+      </select>
       <span class="separator" aria-hidden="true"></span>
       <button type="button" data-format="general" title="Formato geral">Geral</button>
       <button type="button" data-format="#,##0.00" title="Número com duas casas">0,00</button>
@@ -64,6 +76,20 @@
       <canvas id="grid" tabindex="0" aria-label="Planilha"></canvas>
       <input id="cell-editor" hidden autocomplete="off" spellcheck="false" aria-label="Conteúdo da célula" />
     </main>
+
+    <div id="menu" role="menu" aria-label="Ações da seleção" hidden>
+      <button type="button" role="menuitem" data-action="cut">Recortar</button>
+      <button type="button" role="menuitem" data-action="copy">Copiar</button>
+      <button type="button" role="menuitem" data-action="paste">Colar</button>
+      <hr />
+      <button type="button" role="menuitem" data-action="insert-row-above">Inserir linha acima</button>
+      <button type="button" role="menuitem" data-action="insert-row-below">Inserir linha abaixo</button>
+      <button type="button" role="menuitem" data-action="delete-rows">Excluir linhas selecionadas</button>
+      <hr />
+      <button type="button" role="menuitem" data-action="insert-col-left">Inserir coluna à esquerda</button>
+      <button type="button" role="menuitem" data-action="insert-col-right">Inserir coluna à direita</button>
+      <button type="button" role="menuitem" data-action="delete-cols">Excluir colunas selecionadas</button>
+    </div>
 
     <footer>
       <div id="sheet-tabs" role="tablist" aria-label="Planilhas"></div>

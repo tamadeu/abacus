@@ -11,7 +11,8 @@ use std::path::{Path, PathBuf};
 use ironcalc::base::UserModel;
 use ironcalc::base::ClipboardData;
 use ironcalc::base::expressions::types::Area;
-use ironcalc::base::types::{CellType, HorizontalAlignment, Style};
+use ironcalc::base::types::{BorderItem, BorderStyle, CellType, Color, HorizontalAlignment, Style};
+use ironcalc::base::BorderArea;
 use ironcalc::export::save_xlsx_to_writer;
 use ironcalc::import::load_from_xlsx;
 use serde::{Deserialize, Serialize};
@@ -35,8 +36,11 @@ pub struct View {
     pub col_widths: Vec<f64>,
     /// Altura, em pixels, de cada linha visível a partir da primeira.
     pub row_heights: Vec<f64>,
-    /// Células com conteúdo ou estilo, já calculadas.
+    /// Células com conteúdo ou estilo, já calculadas. Inclui a célula
+    /// principal de cada área mesclada da tela, mesmo que ela esteja fora.
     pub cells: Vec<CellView>,
+    /// Áreas mescladas que aparecem na tela.
+    pub merges: Vec<Range>,
 }
 
 /// Um retângulo de células, com coluna e linha iniciais a partir de zero.
@@ -46,6 +50,32 @@ pub struct Range {
     pub row: u32,
     pub cols: u32,
     pub rows: u32,
+}
+
+/// Quais bordas de um intervalo desenhar.
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum BorderKind {
+    /// Todas as linhas, por dentro e por fora.
+    All,
+    /// Só o contorno do intervalo.
+    Outer,
+    Top,
+    Bottom,
+    Left,
+    Right,
+    /// Remove as bordas.
+    None,
+}
+
+/// Inserção ou exclusão de linhas ou colunas inteiras.
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Structure {
+    InsertRows,
+    DeleteRows,
+    InsertCols,
+    DeleteCols,
 }
 
 /// Direção de um preenchimento com a alça da seleção.
@@ -75,6 +105,8 @@ pub enum StyleProperty {
     Align,
     /// Formato numérico do Excel, como `0.00%`.
     Format,
+    /// Quebra de texto: `"true"` ou `"false"`.
+    Wrap,
 }
 
 impl StyleProperty {
@@ -89,6 +121,7 @@ impl StyleProperty {
             StyleProperty::Fill => "fill.color",
             StyleProperty::Align => "alignment.horizontal",
             StyleProperty::Format => "num_fmt",
+            StyleProperty::Wrap => "alignment.wrap_text",
         }
     }
 }
@@ -130,6 +163,21 @@ pub struct CellStyle {
     /// Alinhamento horizontal explícito. Sem ele, números ficam à direita e
     /// texto à esquerda.
     pub align: Option<Align>,
+    /// O texto quebra em várias linhas dentro da célula.
+    pub wrap: bool,
+    /// Bordas da célula, na ordem: cima, direita, baixo, esquerda.
+    pub borders: [Option<BorderLine>; 4],
+}
+
+/// Uma borda de célula, reduzida ao que a grade desenha.
+#[derive(Debug, PartialEq, Eq, Serialize)]
+pub struct BorderLine {
+    /// Cor, como `#RRGGBB`.
+    pub color: String,
+    /// Espessura em pixels: 1 (fina), 2 (média) ou 3 (grossa ou dupla).
+    pub width: u8,
+    /// Tracejada ou pontilhada.
+    pub dashed: bool,
 }
 
 #[derive(Debug, PartialEq, Eq, Serialize)]
@@ -270,24 +318,103 @@ impl Engine {
         let bottom = (top + row_heights.len() as i32 - 1).min(used.max_row);
         let right = (left + col_widths.len() as i32 - 1).min(used.max_column);
 
+        let last_row = top + row_heights.len() as i32 - 1;
+        let last_col = left + col_widths.len() as i32 - 1;
         let mut cells = Vec::new();
-        for row in top.max(used.min_row)..=bottom {
-            for col in left.max(used.min_column)..=right {
-                let input = self.model.get_cell_content(sheet, row, col)?;
-                let display = self.model.get_formatted_cell_value(sheet, row, col)?;
-                let style = self.cell_style(&self.model.get_cell_style(sheet, row, col)?);
-                if input.is_empty() && display.is_empty() && style.is_none() {
-                    continue;
-                }
-                let kind = match self.model.get_cell_type(sheet, row, col)? {
-                    CellType::Number => CellKind::Number,
-                    CellType::ErrorValue => CellKind::Error,
-                    _ => CellKind::Text,
-                };
-                cells.push(CellView { col: (col - 1) as u32, row: (row - 1) as u32, input, display, kind, style });
+        // Áreas mescladas que cruzam a tela. A célula principal de cada uma
+        // entra na lista mesmo estando fora, porque é ela que tem o conteúdo.
+        let mut merges = Vec::new();
+        for merge in self.model.get_merged_cells(sheet)? {
+            let on_screen = merge.row <= last_row
+                && merge.row + merge.height > top
+                && merge.column <= last_col
+                && merge.column + merge.width > left;
+            if !on_screen {
+                continue;
+            }
+            merges.push(Range {
+                col: (merge.column - 1) as u32,
+                row: (merge.row - 1) as u32,
+                cols: merge.width as u32,
+                rows: merge.height as u32,
+            });
+            if merge.row < top || merge.column < left {
+                cells.extend(self.cell_view(sheet, merge.row, merge.column)?);
             }
         }
-        Ok(View { col_widths, row_heights, cells })
+        for row in top.max(used.min_row)..=bottom {
+            for col in left.max(used.min_column)..=right {
+                cells.extend(self.cell_view(sheet, row, col)?);
+            }
+        }
+        Ok(View { col_widths, row_heights, cells, merges })
+    }
+
+    /// O que desenhar numa célula (linha e coluna a partir de um), ou `None`
+    /// se ela não tem conteúdo nem estilo.
+    fn cell_view(&self, sheet: u32, row: i32, col: i32) -> Result<Option<CellView>, String> {
+        let input = self.model.get_cell_content(sheet, row, col)?;
+        let display = self.model.get_formatted_cell_value(sheet, row, col)?;
+        let style = self.cell_style(&self.model.get_cell_style(sheet, row, col)?);
+        if input.is_empty() && display.is_empty() && style.is_none() {
+            return Ok(None);
+        }
+        let kind = match self.model.get_cell_type(sheet, row, col)? {
+            CellType::Number => CellKind::Number,
+            CellType::ErrorValue => CellKind::Error,
+            _ => CellKind::Text,
+        };
+        Ok(Some(CellView { col: (col - 1) as u32, row: (row - 1) as u32, input, display, kind, style }))
+    }
+
+    /// Mescla o intervalo numa célula só, centralizada, como o "Mesclar e
+    /// centralizar" do Excel. Falha se mais de uma célula tiver conteúdo.
+    pub fn merge(&mut self, sheet: u32, range: Range) -> Result<(), String> {
+        self.model.merge_cells_center(&area(sheet, range)?)
+    }
+
+    /// Desfaz as áreas mescladas que tocam o intervalo.
+    pub fn unmerge(&mut self, sheet: u32, range: Range) -> Result<(), String> {
+        self.model.unmerge_cells(&area(sheet, range)?)
+    }
+
+    /// Desenha (ou remove) bordas finas e pretas no intervalo.
+    pub fn set_border(&mut self, sheet: u32, range: Range, kind: BorderKind) -> Result<(), String> {
+        let kind = match kind {
+            BorderKind::All => "All",
+            BorderKind::Outer => "Outer",
+            BorderKind::Top => "Top",
+            BorderKind::Bottom => "Bottom",
+            BorderKind::Left => "Left",
+            BorderKind::Right => "Right",
+            BorderKind::None => "None",
+        };
+        // Os campos de `BorderArea` são privados; o IronCalc o constrói a
+        // partir de JSON também nos próprios testes.
+        let border: BorderArea = serde_json::from_value(serde_json::json!({
+            "item": { "style": "thin", "color": "#000000" },
+            "type": kind,
+        }))
+        .map_err(|e| format!("borda inválida: {e}"))?;
+        self.model.set_area_with_border(&area(sheet, range)?, &border)
+    }
+
+    /// Insere ou exclui `count` linhas ou colunas a partir de `index` (a
+    /// partir de zero). As fórmulas que apontam para depois acompanham.
+    pub fn change_structure(&mut self, sheet: u32, change: Structure, index: u32, count: u32) -> Result<(), String> {
+        let index = to_i32(index)?.saturating_add(1);
+        let count = to_i32(count)?;
+        if count < 1 {
+            return Err("a quantidade precisa ser de pelo menos um".into());
+        }
+        // O que foi copiado guarda posições que acabam de mudar.
+        self.copied = None;
+        match change {
+            Structure::InsertRows => self.model.insert_rows(sheet, index, count),
+            Structure::DeleteRows => self.model.delete_rows(sheet, index, count),
+            Structure::InsertCols => self.model.insert_columns(sheet, index, count),
+            Structure::DeleteCols => self.model.delete_columns(sheet, index, count),
+        }
     }
 
     /// Altera uma propriedade de estilo em todas as células do retângulo.
@@ -377,12 +504,29 @@ impl Engine {
 
     /// Reduz o estilo do IronCalc ao que a grade desenha. `None` se for o padrão.
     fn cell_style(&self, style: &Style) -> Option<CellStyle> {
-        let color = |color| Some(self.model.resolve_color(color)).filter(|hex| !hex.is_empty());
+        let color = |color: &Color| Some(self.model.resolve_color(color)).filter(|hex| !hex.is_empty());
         let align = match style.alignment.as_ref().map(|a| &a.horizontal) {
             Some(HorizontalAlignment::Left) => Some(Align::Left),
             Some(HorizontalAlignment::Center | HorizontalAlignment::CenterContinuous) => Some(Align::Center),
             Some(HorizontalAlignment::Right) => Some(Align::Right),
             _ => None,
+        };
+        let border = |item: &Option<BorderItem>| {
+            item.as_ref().map(|item| BorderLine {
+                color: color(&item.color).unwrap_or_else(|| "#000000".to_string()),
+                width: match item.style {
+                    BorderStyle::Thin | BorderStyle::Dotted | BorderStyle::SlantDashDot => 1,
+                    BorderStyle::Medium
+                    | BorderStyle::MediumDashed
+                    | BorderStyle::MediumDashDot
+                    | BorderStyle::MediumDashDotDot => 2,
+                    BorderStyle::Thick | BorderStyle::Double => 3,
+                },
+                dashed: !matches!(
+                    item.style,
+                    BorderStyle::Thin | BorderStyle::Medium | BorderStyle::Thick | BorderStyle::Double
+                ),
+            })
         };
         let cell_style = CellStyle {
             bold: style.font.b,
@@ -392,6 +536,13 @@ impl Engine {
             color: color(&style.font.color),
             fill: color(&style.fill.color),
             align,
+            wrap: style.alignment.as_ref().is_some_and(|a| a.wrap_text),
+            borders: [
+                border(&style.border.top),
+                border(&style.border.right),
+                border(&style.border.bottom),
+                border(&style.border.left),
+            ],
         };
         (cell_style != CellStyle::default()).then_some(cell_style)
     }
@@ -765,6 +916,84 @@ mod tests {
 
     fn range(col: u32, row: u32, cols: u32, rows: u32) -> Range {
         Range { col, row, cols, rows }
+    }
+
+    #[test]
+    fn merges_and_unmerges_cells() {
+        let mut e = engine(&[(1, 1, "Título")]);
+        e.merge(0, range(1, 1, 3, 2)).unwrap();
+
+        let view = e.view(0, 0, 0, 900.0, 250.0).unwrap();
+        assert_eq!(view.merges, [range(1, 1, 3, 2)]);
+        let anchor = cell(&e, 1, 1).unwrap();
+        assert_eq!(anchor.display, "Título");
+        assert_eq!(anchor.style.unwrap().align, Some(Align::Center));
+
+        // Com a tela começando no meio da área, a célula principal vem junto.
+        let scrolled = e.view(0, 2, 2, 900.0, 250.0).unwrap();
+        assert_eq!(scrolled.merges, [range(1, 1, 3, 2)]);
+        assert!(scrolled.cells.iter().any(|c| (c.col, c.row) == (1, 1) && c.display == "Título"));
+        // Fora da área, nada.
+        assert!(e.view(0, 10, 10, 900.0, 250.0).unwrap().merges.is_empty());
+
+        // Duas células com conteúdo não podem ser mescladas.
+        e.set_cell(0, 6, 0, "a").unwrap();
+        e.set_cell(0, 7, 0, "b").unwrap();
+        assert!(e.merge(0, range(6, 0, 2, 1)).is_err());
+
+        e.unmerge(0, range(2, 2, 1, 1)).unwrap();
+        assert!(e.view(0, 0, 0, 900.0, 250.0).unwrap().merges.is_empty());
+        assert_eq!(shown(&e, 1, 1), "Título");
+        e.undo().unwrap();
+        assert_eq!(e.view(0, 0, 0, 900.0, 250.0).unwrap().merges.len(), 1);
+    }
+
+    #[test]
+    fn borders_and_wrap() {
+        let mut e = engine(&[(0, 0, "texto bem comprido")]);
+        e.set_border(0, range(0, 0, 2, 2), BorderKind::Outer).unwrap();
+        let thin = |style: &CellStyle, side: usize| style.borders[side].as_ref().map(|b| (b.color.clone(), b.width, b.dashed));
+        let black = Some(("#000000".to_string(), 1, false));
+        // Ordem: cima, direita, baixo, esquerda.
+        let top_left = cell(&e, 0, 0).unwrap().style.unwrap();
+        assert_eq!([thin(&top_left, 0), thin(&top_left, 3)], [black.clone(), black.clone()]);
+        assert_eq!([thin(&top_left, 1), thin(&top_left, 2)], [None, None]);
+        let bottom_right = cell(&e, 1, 1).unwrap().style.unwrap();
+        assert_eq!([thin(&bottom_right, 1), thin(&bottom_right, 2)], [black.clone(), black]);
+
+        e.set_border(0, range(0, 0, 2, 2), BorderKind::None).unwrap();
+        assert_eq!(cell(&e, 0, 0).unwrap().style, None);
+        assert!(cell(&e, 1, 1).is_none());
+
+        e.format(0, range(0, 0, 1, 1), StyleProperty::Wrap, "true").unwrap();
+        assert!(cell(&e, 0, 0).unwrap().style.unwrap().wrap);
+        e.format(0, range(0, 0, 1, 1), StyleProperty::Wrap, "false").unwrap();
+        assert_eq!(cell(&e, 0, 0).unwrap().style, None);
+    }
+
+    #[test]
+    fn inserts_and_deletes_rows_and_columns() {
+        let mut e = engine(&[(0, 0, "1"), (0, 1, "2"), (0, 2, "=A1+A2"), (2, 0, "=A3*10")]);
+        // Duas linhas novas antes da segunda: tudo desce e as fórmulas acompanham.
+        e.change_structure(0, Structure::InsertRows, 1, 2).unwrap();
+        assert!(cell(&e, 0, 1).is_none());
+        assert_eq!(shown(&e, 0, 3), "2");
+        let sum = cell(&e, 0, 4).unwrap();
+        assert_eq!((sum.input.as_str(), sum.display.as_str()), ("=A1+A4", "3"));
+        assert_eq!(cell(&e, 2, 0).unwrap().input, "=A5*10");
+
+        e.change_structure(0, Structure::DeleteRows, 1, 2).unwrap();
+        assert_eq!(cell(&e, 0, 2).unwrap().input, "=A1+A2");
+
+        e.change_structure(0, Structure::InsertCols, 0, 1).unwrap();
+        assert!(cell(&e, 0, 0).is_none());
+        assert_eq!(cell(&e, 1, 2).unwrap().input, "=B1+B2");
+        e.change_structure(0, Structure::DeleteCols, 0, 1).unwrap();
+        assert_eq!(cell(&e, 0, 2).unwrap().input, "=A1+A2");
+
+        e.undo().unwrap();
+        assert_eq!(cell(&e, 1, 2).unwrap().input, "=B1+B2");
+        assert!(e.change_structure(0, Structure::InsertRows, 0, 0).is_err());
     }
 
     #[test]

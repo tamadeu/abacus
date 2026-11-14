@@ -6,7 +6,7 @@ mod engine;
 use std::path::PathBuf;
 use std::sync::Mutex;
 
-use engine::{Engine, FillAxis, Range, SheetInfo, StyleProperty, View};
+use engine::{BorderKind, Engine, FillAxis, Range, SheetInfo, Structure, StyleProperty, View};
 use tauri::{AppHandle, State};
 use tauri_plugin_clipboard_manager::ClipboardExt;
 
@@ -65,6 +65,36 @@ fn format_cells(
 #[tauri::command]
 fn clear_cells(state: State<'_, AppState>, sheet: u32, range: Range) -> Result<(), String> {
     state.with(|engine| engine.clear(sheet, range))
+}
+
+/// Mescla o intervalo numa célula só, centralizada.
+#[tauri::command]
+fn merge_cells(state: State<'_, AppState>, sheet: u32, range: Range) -> Result<(), String> {
+    state.with(|engine| engine.merge(sheet, range))
+}
+
+/// Desfaz as áreas mescladas que tocam o intervalo.
+#[tauri::command]
+fn unmerge_cells(state: State<'_, AppState>, sheet: u32, range: Range) -> Result<(), String> {
+    state.with(|engine| engine.unmerge(sheet, range))
+}
+
+/// Desenha (ou remove) bordas no intervalo.
+#[tauri::command]
+fn set_border(state: State<'_, AppState>, sheet: u32, range: Range, kind: BorderKind) -> Result<(), String> {
+    state.with(|engine| engine.set_border(sheet, range, kind))
+}
+
+/// Insere ou exclui `count` linhas ou colunas a partir de `index`.
+#[tauri::command]
+fn change_structure(
+    state: State<'_, AppState>,
+    sheet: u32,
+    change: Structure,
+    index: u32,
+    count: u32,
+) -> Result<(), String> {
+    state.with(|engine| engine.change_structure(sheet, change, index, count))
 }
 
 /// Preenche a partir do intervalo até a linha ou coluna `to`, como ao
@@ -172,6 +202,10 @@ pub fn run() {
             get_view,
             format_cells,
             clear_cells,
+            merge_cells,
+            unmerge_cells,
+            set_border,
+            change_structure,
             fill_cells,
             copy_cells,
             paste_cells,

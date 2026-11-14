@@ -81,6 +81,44 @@ body {
   color: #3730a3;
 }
 
+.toolbar select {
+  height: 32px;
+  padding: 0 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+}
+
+/* Menu que abre com o botão direito na grade. */
+#menu {
+  position: fixed;
+  z-index: 10;
+  display: flex;
+  flex-direction: column;
+  min-width: 220px;
+  padding: 6px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #fff;
+  box-shadow: 0 8px 24px rgba(27, 27, 41, 0.16);
+}
+
+#menu button {
+  border: none;
+  border-radius: 6px;
+  text-align: left;
+}
+
+#menu hr {
+  width: 100%;
+  margin: 4px 0;
+  border: none;
+  border-top: 1px solid var(--line);
+}
+
 .separator {
   width: 1px;
   height: 20px;

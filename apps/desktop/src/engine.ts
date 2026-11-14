@@ -13,7 +13,27 @@ export interface CellStyle {
   fill: string | null;
   /** Sem alinhamento explícito, números ficam à direita e texto à esquerda. */
   align: "left" | "center" | "right" | null;
+  /** O texto quebra em várias linhas dentro da célula. */
+  wrap: boolean;
+  /** Bordas da célula, na ordem: cima, direita, baixo, esquerda. */
+  borders: [BorderLine | null, BorderLine | null, BorderLine | null, BorderLine | null];
 }
+
+/** Uma borda de célula. */
+export interface BorderLine {
+  /** Cor, como `#RRGGBB`. */
+  color: string;
+  /** Espessura em pixels: 1, 2 ou 3. */
+  width: number;
+  /** Tracejada ou pontilhada. */
+  dashed: boolean;
+}
+
+/** Quais bordas de um intervalo desenhar; `none` remove todas. */
+export type BorderKind = "all" | "outer" | "top" | "bottom" | "left" | "right" | "none";
+
+/** Inserção ou exclusão de linhas ou colunas inteiras. */
+export type Structure = "insertRows" | "deleteRows" | "insertCols" | "deleteCols";
 
 /** O que a interface precisa saber para desenhar uma célula. */
 export interface CellView {
@@ -34,8 +54,13 @@ export interface View {
   colWidths: number[];
   /** Altura, em pixels, de cada linha visível a partir da primeira. */
   rowHeights: number[];
-  /** Células com conteúdo ou estilo, já calculadas. */
+  /**
+   * Células com conteúdo ou estilo, já calculadas. Inclui a célula principal
+   * de cada área mesclada da tela, mesmo que ela esteja fora.
+   */
   cells: CellView[];
+  /** Áreas mescladas que aparecem na tela. */
+  merges: Range[];
 }
 
 /** Um retângulo de células, com coluna e linha iniciais a partir de zero. */
@@ -50,9 +75,10 @@ export interface Range {
  * Propriedades de estilo que a interface pode alterar. `bold`, `italic`,
  * `underline` e `strike` recebem `"true"` ou `"false"`; `color` e `fill`,
  * uma cor `#RRGGBB` ou vazio para remover; `align`, `"left"`, `"center"`,
- * `"right"` ou `"general"`; `format`, um formato numérico do Excel.
+ * `"right"` ou `"general"`; `format`, um formato numérico do Excel; `wrap`,
+ * `"true"` ou `"false"`.
  */
-export type StyleProperty = "bold" | "italic" | "underline" | "strike" | "color" | "fill" | "align" | "format";
+export type StyleProperty = "bold" | "italic" | "underline" | "strike" | "color" | "fill" | "align" | "format" | "wrap";
 
 /** Uma planilha visível da pasta de trabalho. */
 export interface SheetInfo {
@@ -100,6 +126,14 @@ export interface Engine {
   format(sheet: number, range: Range, property: StyleProperty, value: string): Promise<void>;
   /** Apaga o conteúdo das células do intervalo, mantendo o estilo. */
   clearCells(sheet: number, range: Range): Promise<void>;
+  /** Mescla o intervalo numa célula só, centralizada. */
+  merge(sheet: number, range: Range): Promise<void>;
+  /** Desfaz as áreas mescladas que tocam o intervalo. */
+  unmerge(sheet: number, range: Range): Promise<void>;
+  /** Desenha (ou remove) bordas finas no intervalo. */
+  setBorder(sheet: number, range: Range, kind: BorderKind): Promise<void>;
+  /** Insere ou exclui `count` linhas ou colunas a partir de `index`. */
+  changeStructure(sheet: number, change: Structure, index: number, count: number): Promise<void>;
   /**
    * Preenche a partir do intervalo até a linha ou coluna `to`, como ao
    * arrastar a alça da seleção.
@@ -180,6 +214,22 @@ class TauriEngine implements Engine {
     return invoke("clear_cells", { sheet, range });
   }
 
+  merge(sheet: number, range: Range): Promise<void> {
+    return invoke("merge_cells", { sheet, range });
+  }
+
+  unmerge(sheet: number, range: Range): Promise<void> {
+    return invoke("unmerge_cells", { sheet, range });
+  }
+
+  setBorder(sheet: number, range: Range, kind: BorderKind): Promise<void> {
+    return invoke("set_border", { sheet, range, kind });
+  }
+
+  changeStructure(sheet: number, change: Structure, index: number, count: number): Promise<void> {
+    return invoke("change_structure", { sheet, change, index, count });
+  }
+
   fill(sheet: number, range: Range, axis: "rows" | "cols", to: number): Promise<void> {
     return invoke("fill_cells", { sheet, range, axis, to });
   }
@@ -204,7 +254,8 @@ class TauriEngine implements Engine {
 /**
  * Substituto usado quando a interface roda no navegador (`npm run dev`),
  * fora do Tauri. Guarda o que foi digitado, mas não calcula fórmulas, não
- * formata, não redimensiona, não desfaz edições e não abre nem salva arquivos.
+ * formata, não mescla, não redimensiona, não insere nem exclui linhas e
+ * colunas, não desfaz edições e não abre nem salva arquivos.
  * Copiar e colar funcionam só dentro da própria página, e preencher com a
  * alça repete os valores, sem continuar sequências.
  */
@@ -269,10 +320,19 @@ class PreviewEngine implements Engine {
       colWidths: new Array<number>(cols).fill(90),
       rowHeights: new Array<number>(rows).fill(25),
       cells: this.inRange(sheet, range).map(([, cell]) => cell),
+      merges: [],
     };
   }
 
   async format(): Promise<void> {}
+
+  async merge(): Promise<void> {}
+
+  async unmerge(): Promise<void> {}
+
+  async setBorder(): Promise<void> {}
+
+  async changeStructure(): Promise<void> {}
 
   async clearCells(sheet: number, range: Range): Promise<void> {
     for (const [key] of this.inRange(sheet, range)) this.cells.delete(key);
