@@ -54,9 +54,17 @@ export interface CellView {
 
 /** O pedaço de uma planilha que cabe na tela. */
 export interface View {
-  /** Largura, em pixels, de cada coluna visível a partir da primeira. */
+  /** Quantas colunas, a partir da primeira da planilha, ficam congeladas à esquerda. */
+  frozenCols: number;
+  /** Quantas linhas ficam congeladas no topo. */
+  frozenRows: number;
+  /**
+   * Largura, em pixels, de cada coluna da tela: primeiro as congeladas,
+   * depois as visíveis a partir da primeira pedida. Uma coluna oculta tem
+   * largura zero.
+   */
   colWidths: number[];
-  /** Altura, em pixels, de cada linha visível a partir da primeira. */
+  /** Altura, em pixels, de cada linha da tela, na mesma ordem. */
   rowHeights: number[];
   /**
    * Células com conteúdo ou estilo, já calculadas. Inclui a célula principal
@@ -73,6 +81,29 @@ export interface Range {
   row: number;
   cols: number;
   rows: number;
+}
+
+/** Posição de uma célula, a partir de zero. */
+export interface CellPos {
+  col: number;
+  row: number;
+}
+
+/** O que dá para filtrar numa coluna de uma tabela. */
+export interface FilterOptions {
+  /** Linhas de dados da tabela, sem o cabeçalho. */
+  range: Range;
+  /** Coluna filtrada. */
+  col: number;
+  /** Valores distintos da coluna, em ordem. */
+  values: FilterValue[];
+}
+
+export interface FilterValue {
+  /** Texto mostrado na célula; vazio para as células em branco. */
+  text: string;
+  /** Há pelo menos uma linha com este valor à mostra. */
+  shown: boolean;
 }
 
 /**
@@ -123,6 +154,8 @@ export interface Engine {
   readonly files: FileAccess | null;
   /** Se `format` tem efeito. */
   readonly formatting: boolean;
+  /** Se dá para congelar, ocultar, classificar e filtrar. */
+  readonly tables: boolean;
   /** Pede confirmação para uma ação que não dá para desfazer sem perda. `okLabel` é o texto do botão que confirma. */
   confirm(message: string, okLabel: string): Promise<boolean>;
   sheets(): Promise<SheetInfo[]>;
@@ -159,6 +192,28 @@ export interface Engine {
   copy(sheet: number, range: Range, cut: boolean): Promise<void>;
   /** Cola a partir da célula dada. Devolve o intervalo preenchido, ou `null` se não havia o que colar. */
   paste(sheet: number, col: number, row: number): Promise<Range | null>;
+  /** Congela as primeiras `cols` colunas e `rows` linhas; zero descongela. */
+  setFrozen(sheet: number, cols: number, rows: number): Promise<void>;
+  /** Oculta ou reexibe `count` linhas ou colunas a partir de `first`. */
+  setHidden(sheet: number, axis: "rows" | "cols", first: number, count: number, hidden: boolean): Promise<void>;
+  /**
+   * Células da planilha que contêm o texto, sem diferenciar maiúsculas de
+   * minúsculas, em ordem de leitura.
+   */
+  find(sheet: number, query: string): Promise<CellPos[]>;
+  /** Troca o texto procurado numa célula. Devolve `false` se o texto só existe no valor calculado. */
+  replace(sheet: number, col: number, row: number, query: string, replacement: string): Promise<boolean>;
+  /** Troca o texto na planilha inteira. Devolve quantas células mudaram. */
+  replaceAll(sheet: number, query: string, replacement: string): Promise<number>;
+  /**
+   * Classifica linhas pela coluna `keyCol`: a seleção, ou a tabela em volta
+   * dela se for uma célula só. Devolve o intervalo classificado.
+   */
+  sort(sheet: number, range: Range, keyCol: number, descending: boolean): Promise<Range>;
+  /** Valores que dá para filtrar na coluna da célula, na tabela em volta dela. */
+  filterOptions(sheet: number, col: number, row: number): Promise<FilterOptions>;
+  /** Mostra só as linhas do intervalo com um dos valores na coluna. Devolve quantas ficaram ocultas. */
+  applyFilter(sheet: number, range: Range, col: number, allowed: string[]): Promise<number>;
   undo(): Promise<void>;
   redo(): Promise<void>;
 }
@@ -169,6 +224,7 @@ const XLSX_FILTER = [{ name: "Pasta de trabalho do Excel", extensions: ["xlsx"] 
 class TauriEngine implements Engine {
   readonly notice = null;
   readonly formatting = true;
+  readonly tables = true;
 
   readonly files: FileAccess = {
     async open() {
@@ -258,6 +314,38 @@ class TauriEngine implements Engine {
     return invoke("paste_cells", { sheet, col, row });
   }
 
+  setFrozen(sheet: number, cols: number, rows: number): Promise<void> {
+    return invoke("set_frozen", { sheet, cols, rows });
+  }
+
+  setHidden(sheet: number, axis: "rows" | "cols", first: number, count: number, hidden: boolean): Promise<void> {
+    return invoke("set_hidden", { sheet, axis, first, count, hidden });
+  }
+
+  find(sheet: number, query: string): Promise<CellPos[]> {
+    return invoke("find_cells", { sheet, query });
+  }
+
+  replace(sheet: number, col: number, row: number, query: string, replacement: string): Promise<boolean> {
+    return invoke("replace_cell", { sheet, col, row, query, replacement });
+  }
+
+  replaceAll(sheet: number, query: string, replacement: string): Promise<number> {
+    return invoke("replace_all", { sheet, query, replacement });
+  }
+
+  sort(sheet: number, range: Range, keyCol: number, descending: boolean): Promise<Range> {
+    return invoke("sort_cells", { sheet, range, keyCol, descending });
+  }
+
+  filterOptions(sheet: number, col: number, row: number): Promise<FilterOptions> {
+    return invoke("filter_options", { sheet, col, row });
+  }
+
+  applyFilter(sheet: number, range: Range, col: number, allowed: string[]): Promise<number> {
+    return invoke("apply_filter", { sheet, range, col, allowed });
+  }
+
   undo(): Promise<void> {
     return invoke("undo");
   }
@@ -271,7 +359,8 @@ class TauriEngine implements Engine {
  * Substituto usado quando a interface roda no navegador (`npm run dev`),
  * fora do Tauri. Guarda o que foi digitado, mas não calcula fórmulas, não
  * formata, não mescla, não redimensiona, não insere nem exclui linhas e
- * colunas, não desfaz edições e não abre nem salva arquivos.
+ * colunas, não congela, não oculta, não classifica, não filtra, não desfaz
+ * edições e não abre nem salva arquivos.
  * Copiar e colar funcionam só dentro da própria página, e preencher com a
  * alça repete os valores, sem continuar sequências.
  */
@@ -279,6 +368,7 @@ class PreviewEngine implements Engine {
   readonly notice = "Pré-visualização no navegador (sem motor de cálculo)";
   readonly files = null;
   readonly formatting = false;
+  readonly tables = false;
   private names = ["Planilha1"];
   private cells = new Map<string, CellView>();
   /** Última cópia: o texto de cada célula e, se foi um recortar, de onde saiu. */
@@ -333,6 +423,8 @@ class PreviewEngine implements Engine {
     const rows = Math.ceil(height / 25);
     const range = { col: firstCol, row: firstRow, cols, rows };
     return {
+      frozenCols: 0,
+      frozenRows: 0,
       colWidths: new Array<number>(cols).fill(90),
       rowHeights: new Array<number>(rows).fill(25),
       cells: this.inRange(sheet, range).map(([, cell]) => cell),
@@ -409,6 +501,47 @@ class PreviewEngine implements Engine {
         cell.row >= range.row &&
         cell.row < range.row + range.rows,
     );
+  }
+
+  async setFrozen(): Promise<void> {}
+
+  async setHidden(): Promise<void> {}
+
+  async find(sheet: number, query: string): Promise<CellPos[]> {
+    if (query === "") return [];
+    const wanted = query.toLowerCase();
+    return [...this.cells]
+      .filter(([key, cell]) => key.startsWith(`${sheet}:`) && cell.input.toLowerCase().includes(wanted))
+      .map(([, cell]) => ({ col: cell.col, row: cell.row }))
+      .sort((a, b) => a.row - b.row || a.col - b.col);
+  }
+
+  async replace(sheet: number, col: number, row: number, query: string, replacement: string): Promise<boolean> {
+    const input = this.cells.get(`${sheet}:${col},${row}`)?.input ?? "";
+    if (query === "" || !input.toLowerCase().includes(query.toLowerCase())) return false;
+    const escaped = query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    await this.setCell(sheet, col, row, input.replace(new RegExp(escaped, "gi"), () => replacement));
+    return true;
+  }
+
+  async replaceAll(sheet: number, query: string, replacement: string): Promise<number> {
+    let changed = 0;
+    for (const cell of await this.find(sheet, query)) {
+      if (await this.replace(sheet, cell.col, cell.row, query, replacement)) changed++;
+    }
+    return changed;
+  }
+
+  async sort(): Promise<Range> {
+    throw new Error("a pré-visualização não classifica");
+  }
+
+  async filterOptions(): Promise<FilterOptions> {
+    throw new Error("a pré-visualização não filtra");
+  }
+
+  async applyFilter(): Promise<number> {
+    return 0;
   }
 
   async undo(): Promise<void> {}

@@ -47,6 +47,15 @@ Projeto no início. O que já funciona:
   transferência do sistema recebe e aceita texto separado por tabulações,
   para trocar dados com outros programas.
 - Desfazer e refazer (Ctrl+Z, Ctrl+Y).
+- Localizar e substituir (Ctrl+F e Ctrl+H): sem diferenciar maiúsculas, nas
+  células com o texto digitado ou mostrado, com as encontradas destacadas, e
+  "Substituir tudo" desfeito num passo só. Fórmulas só são alteradas no que
+  foi digitado, nunca no resultado.
+- Congelar painéis, ocultar e reexibir linhas e colunas (menu de contexto):
+  a parte congelada fica fixa na rolagem e tudo isso é gravado no `.xlsx`.
+- Classificar de A a Z ou de Z a A pela coluna da célula ativa (a seleção, ou
+  a tabela em volta, mantendo o cabeçalho; as fórmulas acompanham a linha) e
+  filtrar uma coluna por valores. Filtros de colunas diferentes se somam.
 - As fórmulas e funções do IronCalc, com os nomes do Excel em português,
   incluindo `LET`, `LAMBDA` e matrizes dinâmicas. Arquivos `.xlsx` continuam
   compatíveis: no arquivo as funções ficam gravadas em inglês, como no Excel.
@@ -68,6 +77,11 @@ Limitações conhecidas:
 - As bordas aplicadas pela barra são sempre finas e pretas; as do arquivo
   aparecem com cor e espessura, mas a dupla é desenhada como grossa.
 - Bordas e mesclagem não funcionam numa linha ou coluna inteira.
+- O filtro é feito ocultando linhas, como "Ocultar linhas": não há setas no
+  cabeçalho nem filtro por condição (maior que, contém…), e o arquivo não
+  guarda a configuração de filtro, só as linhas ocultas.
+- Classificar não aceita várias colunas de critério nem linhas ocultas no
+  intervalo.
 - Fechar a janela não avisa sobre alterações não salvas.
 - Arquivos gerados pela biblioteca openpyxl mostram `0` em células vazias que
   só têm estilo. É um defeito do importador do IronCalc com células gravadas
@@ -107,11 +121,9 @@ cargo test
 
 ## Próximos passos
 
-1. Localizar e substituir.
-2. Congelar painéis e ocultar linhas e colunas.
-3. Classificar e filtrar.
-4. Propor o português do Brasil ao IronCalc original.
-5. Versão web com o motor em WebAssembly.
+1. Propor o português do Brasil ao IronCalc original.
+2. Versão web com o motor em WebAssembly.
+3. Gráficos.
 
 ## Licença
 

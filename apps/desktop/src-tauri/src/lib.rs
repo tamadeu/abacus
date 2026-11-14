@@ -6,7 +6,9 @@ mod engine;
 use std::path::PathBuf;
 use std::sync::Mutex;
 
-use engine::{BorderKind, Engine, FillAxis, Range, SheetInfo, Structure, StyleProperty, View};
+use engine::{
+    Axis, BorderKind, CellPos, Engine, FillAxis, FilterOptions, Range, SheetInfo, Structure, StyleProperty, View,
+};
 use tauri::{AppHandle, State};
 use tauri_plugin_clipboard_manager::ClipboardExt;
 
@@ -97,6 +99,80 @@ fn change_structure(
     state.with(|engine| engine.change_structure(sheet, change, index, count))
 }
 
+/// Congela as primeiras colunas e linhas da planilha; zero descongela.
+#[tauri::command]
+fn set_frozen(state: State<'_, AppState>, sheet: u32, cols: u32, rows: u32) -> Result<(), String> {
+    state.with(|engine| engine.set_frozen(sheet, cols, rows))
+}
+
+/// Oculta ou reexibe linhas ou colunas.
+#[tauri::command]
+fn set_hidden(
+    state: State<'_, AppState>,
+    sheet: u32,
+    axis: Axis,
+    first: u32,
+    count: u32,
+    hidden: bool,
+) -> Result<(), String> {
+    state.with(|engine| engine.set_hidden(sheet, axis, first, count, hidden))
+}
+
+/// Células da planilha que contêm o texto.
+#[tauri::command]
+fn find_cells(state: State<'_, AppState>, sheet: u32, query: String) -> Result<Vec<CellPos>, String> {
+    state.with(|engine| engine.find(sheet, &query))
+}
+
+/// Troca o texto procurado numa célula. Devolve se havia o que trocar.
+#[tauri::command]
+fn replace_cell(
+    state: State<'_, AppState>,
+    sheet: u32,
+    col: u32,
+    row: u32,
+    query: String,
+    replacement: String,
+) -> Result<bool, String> {
+    state.with(|engine| engine.replace(sheet, col, row, &query, &replacement))
+}
+
+/// Troca o texto na planilha inteira. Devolve quantas células mudaram.
+#[tauri::command]
+fn replace_all(state: State<'_, AppState>, sheet: u32, query: String, replacement: String) -> Result<u32, String> {
+    state.with(|engine| engine.replace_all(sheet, &query, &replacement))
+}
+
+/// Classifica as linhas da seleção (ou da tabela em volta de uma célula) por uma coluna.
+#[tauri::command]
+fn sort_cells(
+    state: State<'_, AppState>,
+    sheet: u32,
+    range: Range,
+    key_col: u32,
+    descending: bool,
+) -> Result<Range, String> {
+    state.with(|engine| engine.sort(sheet, range, key_col, descending))
+}
+
+/// Valores que dá para filtrar na coluna da célula.
+#[tauri::command]
+fn filter_options(state: State<'_, AppState>, sheet: u32, col: u32, row: u32) -> Result<FilterOptions, String> {
+    state.with(|engine| engine.filter_options(sheet, col, row))
+}
+
+/// Mostra só as linhas com os valores escolhidos. Devolve quantas ficaram ocultas.
+#[tauri::command]
+fn apply_filter(
+    state: State<'_, AppState>,
+    sheet: u32,
+    range: Range,
+    col: u32,
+    allowed: Vec<String>,
+) -> Result<u32, String> {
+    state.with(|engine| engine.apply_filter(sheet, range, col, &allowed))
+}
+
 /// Preenche a partir do intervalo até a linha ou coluna `to`, como ao
 /// arrastar a alça da seleção.
 #[tauri::command]
@@ -108,9 +184,7 @@ fn fill_cells(state: State<'_, AppState>, sheet: u32, range: Range, axis: FillAx
 #[tauri::command]
 fn copy_cells(app: AppHandle, state: State<'_, AppState>, sheet: u32, range: Range, cut: bool) -> Result<(), String> {
     let text = state.with(|engine| engine.copy(sheet, range, cut))?;
-    app.clipboard()
-        .write_text(text)
-        .map_err(|e| format!("não foi possível gravar na área de transferência: {e}"))
+    app.clipboard().write_text(text).map_err(|e| format!("não foi possível gravar na área de transferência: {e}"))
 }
 
 /// Cola a área de transferência do sistema a partir da célula dada e devolve
@@ -207,6 +281,14 @@ pub fn run() {
             set_border,
             change_structure,
             fill_cells,
+            set_frozen,
+            set_hidden,
+            find_cells,
+            replace_cell,
+            replace_all,
+            sort_cells,
+            filter_options,
+            apply_filter,
             copy_cells,
             paste_cells,
             get_sheets,

@@ -1760,7 +1760,7 @@ checksum = "791930b43c0d5973160d90a8f3894509f2b273430f5c5c73b668636d0287c5c0"
 [[package]]
 name = "ironcalc"
 version = "0.9.1"
-source = "git+https://github.com/tamadeu/IronCalc?branch=portugues-brasil#7c6d7da163f03478203bd3bc52ad7b13d6e9e154"
+source = "git+https://github.com/tamadeu/IronCalc?branch=abacus#0e9bcb0ebccde0cb8fb6e2cf6f0544c28d6134aa"
 dependencies = [
  "bitcode",
  "chrono",
@@ -1776,7 +1776,7 @@ dependencies = [
 [[package]]
 name = "ironcalc_base"
 version = "0.9.1"
-source = "git+https://github.com/tamadeu/IronCalc?branch=portugues-brasil#7c6d7da163f03478203bd3bc52ad7b13d6e9e154"
+source = "git+https://github.com/tamadeu/IronCalc?branch=abacus#0e9bcb0ebccde0cb8fb6e2cf6f0544c28d6134aa"
 dependencies = [
  "bitcode",
  "chrono",
@@ -2483,7 +2483,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7d8fae84b431384b68627d0f9b3b1245fcf9f46f6c0e3dc902e9dce64edd1967"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.45.0",
 ]
 
 [[package]]

@@ -15,6 +15,9 @@
         <h1 id="doc-name">Sem título</h1>
         <p id="doc-state"></p>
       </div>
+      <div class="actions">
+        <button type="button" id="find-btn" title="Localizar e substituir (Ctrl+F)">Localizar</button>
+      </div>
       <div class="actions" id="file-actions">
         <button type="button" id="open-btn">Abrir</button>
         <button type="button" id="save-btn">Salvar</button>
@@ -83,6 +86,20 @@
     <main id="grid-wrap">
       <canvas id="grid" tabindex="0" aria-label="Planilha"></canvas>
       <input id="cell-editor" hidden autocomplete="off" spellcheck="false" aria-label="Conteúdo da célula" />
+      <div id="find" role="search" aria-label="Localizar e substituir" hidden>
+        <div class="find-row">
+          <input id="find-query" placeholder="Localizar" aria-label="Localizar" autocomplete="off" spellcheck="false" />
+          <span id="find-count" role="status"></span>
+          <button type="button" id="find-prev" aria-label="Anterior" title="Anterior (Shift+Enter)">↑</button>
+          <button type="button" id="find-next" aria-label="Próxima" title="Próxima (Enter)">↓</button>
+          <button type="button" id="find-close" aria-label="Fechar" title="Fechar (Esc)">×</button>
+        </div>
+        <div class="find-row">
+          <input id="replace-text" placeholder="Substituir por" aria-label="Substituir por" autocomplete="off" spellcheck="false" />
+          <button type="button" id="replace-one">Substituir</button>
+          <button type="button" id="replace-all">Substituir tudo</button>
+        </div>
+      </div>
     </main>
 
     <div id="menu" role="menu" aria-label="Ações da seleção" hidden>
@@ -90,13 +107,35 @@
       <button type="button" role="menuitem" data-action="copy">Copiar</button>
       <button type="button" role="menuitem" data-action="paste">Colar</button>
       <hr />
-      <button type="button" role="menuitem" data-action="insert-row-above">Inserir linha acima</button>
-      <button type="button" role="menuitem" data-action="insert-row-below">Inserir linha abaixo</button>
-      <button type="button" role="menuitem" data-action="delete-rows">Excluir linhas selecionadas</button>
-      <hr />
-      <button type="button" role="menuitem" data-action="insert-col-left">Inserir coluna à esquerda</button>
-      <button type="button" role="menuitem" data-action="insert-col-right">Inserir coluna à direita</button>
-      <button type="button" role="menuitem" data-action="delete-cols">Excluir colunas selecionadas</button>
+      <button type="button" role="menuitem" data-scope="row" data-action="insert-row-above">Inserir linha acima</button>
+      <button type="button" role="menuitem" data-scope="row" data-action="insert-row-below">Inserir linha abaixo</button>
+      <button type="button" role="menuitem" data-scope="row" data-action="delete-rows">Excluir linhas</button>
+      <button type="button" role="menuitem" data-scope="row" data-tables data-action="hide-rows">Ocultar linhas</button>
+      <button type="button" role="menuitem" data-scope="row" data-tables data-action="show-rows">Reexibir linhas</button>
+      <hr data-scope="row" />
+      <button type="button" role="menuitem" data-scope="col" data-action="insert-col-left">Inserir coluna à esquerda</button>
+      <button type="button" role="menuitem" data-scope="col" data-action="insert-col-right">Inserir coluna à direita</button>
+      <button type="button" role="menuitem" data-scope="col" data-action="delete-cols">Excluir colunas</button>
+      <button type="button" role="menuitem" data-scope="col" data-tables data-action="hide-cols">Ocultar colunas</button>
+      <button type="button" role="menuitem" data-scope="col" data-tables data-action="show-cols">Reexibir colunas</button>
+      <hr data-scope="col" data-tables />
+      <button type="button" role="menuitem" data-scope="col" data-tables data-action="sort-asc">Classificar de A a Z</button>
+      <button type="button" role="menuitem" data-scope="col" data-tables data-action="sort-desc">Classificar de Z a A</button>
+      <button type="button" role="menuitem" data-scope="col" data-tables data-action="filter">Filtrar esta coluna…</button>
+      <button type="button" role="menuitem" data-scope="col" data-tables data-action="clear-filter">Limpar filtro</button>
+      <hr data-tables />
+      <button type="button" role="menuitem" data-tables data-action="freeze">Congelar até aqui</button>
+      <button type="button" role="menuitem" data-tables data-action="unfreeze">Descongelar</button>
+    </div>
+
+    <div id="filter" role="dialog" aria-labelledby="filter-title" hidden>
+      <strong id="filter-title"></strong>
+      <div id="filter-values"></div>
+      <div class="filter-actions">
+        <button type="button" id="filter-all">Marcar tudo</button>
+        <button type="button" id="filter-cancel">Cancelar</button>
+        <button type="button" id="filter-apply" class="primary">Aplicar</button>
+      </div>
     </div>
 
     <ul id="suggest" role="listbox" aria-label="Funções" hidden></ul>

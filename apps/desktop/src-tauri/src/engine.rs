@@ -8,13 +8,12 @@ use std::fs;
 use std::io::Cursor;
 use std::path::{Path, PathBuf};
 
-use ironcalc::base::UserModel;
-use ironcalc::base::ClipboardData;
-use ironcalc::base::expressions::types::Area;
-use ironcalc::base::types::{
-    BorderItem, BorderStyle, CellType, Color, HorizontalAlignment, Style, VerticalAlignment,
-};
 use ironcalc::base::BorderArea;
+use ironcalc::base::ClipboardData;
+use ironcalc::base::UserModel;
+use ironcalc::base::cell::CellValue;
+use ironcalc::base::expressions::types::Area;
+use ironcalc::base::types::{BorderItem, BorderStyle, CellType, Color, HorizontalAlignment, Style, VerticalAlignment};
 use ironcalc::export::save_xlsx_to_writer;
 use ironcalc::import::load_from_xlsx;
 use serde::{Deserialize, Serialize};
@@ -27,6 +26,8 @@ const LANGUAGE: &str = "pt";
 const TIMEZONE: &str = "America/Sao_Paulo";
 /// Limites de quantas colunas e linhas uma única tela pode pedir, para o
 /// caso de muitas delas estarem ocultas (largura ou altura zero).
+/// Máximo de linhas ou colunas ocultadas de uma vez.
+const MAX_HIDE: i64 = 100_000;
 const MAX_VIEW_COLS: usize = 500;
 const MAX_VIEW_ROWS: usize = 2000;
 
@@ -34,15 +35,56 @@ const MAX_VIEW_ROWS: usize = 2000;
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct View {
-    /// Largura, em pixels, de cada coluna visível a partir da primeira.
+    /// Quantas colunas, a partir da primeira da planilha, ficam congeladas à
+    /// esquerda da tela.
+    pub frozen_cols: u32,
+    /// Quantas linhas ficam congeladas no topo da tela.
+    pub frozen_rows: u32,
+    /// Largura, em pixels, de cada coluna da tela: primeiro as congeladas,
+    /// depois as visíveis a partir da primeira pedida. Uma coluna oculta tem
+    /// largura zero.
     pub col_widths: Vec<f64>,
-    /// Altura, em pixels, de cada linha visível a partir da primeira.
+    /// Altura, em pixels, de cada linha da tela, na mesma ordem.
     pub row_heights: Vec<f64>,
     /// Células com conteúdo ou estilo, já calculadas. Inclui a célula
     /// principal de cada área mesclada da tela, mesmo que ela esteja fora.
     pub cells: Vec<CellView>,
     /// Áreas mescladas que aparecem na tela.
     pub merges: Vec<Range>,
+}
+
+/// Posição de uma célula, a partir de zero.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct CellPos {
+    pub col: u32,
+    pub row: u32,
+}
+
+/// Linhas ou colunas.
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Axis {
+    Rows,
+    Cols,
+}
+
+/// O que dá para filtrar numa coluna de uma tabela.
+#[derive(Debug, Serialize)]
+pub struct FilterOptions {
+    /// Linhas de dados da tabela, sem o cabeçalho.
+    pub range: Range,
+    /// Coluna filtrada.
+    pub col: u32,
+    /// Valores distintos da coluna, em ordem.
+    pub values: Vec<FilterValue>,
+}
+
+#[derive(Debug, PartialEq, Eq, Serialize)]
+pub struct FilterValue {
+    /// Texto mostrado na célula; vazio para as células em branco.
+    pub text: String,
+    /// Há pelo menos uma linha com este valor à mostra.
+    pub shown: bool,
 }
 
 /// Um retângulo de células, com coluna e linha iniciais a partir de zero.
@@ -326,25 +368,40 @@ impl Engine {
         self.model.set_user_input(sheet, row, col, input)
     }
 
-    /// O que cabe numa tela de `width` por `height` pixels a partir da
-    /// célula dada: tamanhos de colunas e linhas e as células preenchidas.
+    /// O que cabe numa tela de `width` por `height` pixels: as linhas e
+    /// colunas congeladas e, depois delas, o que vem a partir da célula dada.
     pub fn view(&self, sheet: u32, first_col: u32, first_row: u32, width: f64, height: f64) -> Result<View, String> {
+        let frozen_cols = self.model.get_frozen_columns_count(sheet)?.clamp(0, MAX_VIEW_COLS as i32);
+        let frozen_rows = self.model.get_frozen_rows_count(sheet)?.clamp(0, MAX_VIEW_ROWS as i32);
         let (top, left) = to_ironcalc(first_col, first_row)?;
-        let col_widths = sizes(left, MAX_COLS, MAX_VIEW_COLS, width, |col| self.model.get_column_width(sheet, col))?;
-        let row_heights = sizes(top, MAX_ROWS, MAX_VIEW_ROWS, height, |row| self.model.get_row_height(sheet, row))?;
+        // A parte que rola nunca começa dentro da parte congelada.
+        let (top, left) = (top.max(frozen_rows + 1), left.max(frozen_cols + 1));
 
-        let last_row = top + row_heights.len() as i32 - 1;
-        let last_col = left + col_widths.len() as i32 - 1;
+        let col_width = |col| self.model.get_column_width(sheet, col);
+        let row_height = |row| self.model.get_row_height(sheet, row);
+        let mut col_widths = (1..=frozen_cols).map(col_width).collect::<Result<Vec<_>, _>>()?;
+        let mut row_heights = (1..=frozen_rows).map(row_height).collect::<Result<Vec<_>, _>>()?;
+        let scroll_width = (width - col_widths.iter().sum::<f64>()).max(1.0);
+        let scroll_height = (height - row_heights.iter().sum::<f64>()).max(1.0);
+        let scroll_cols = sizes(left, MAX_COLS, MAX_VIEW_COLS, scroll_width, col_width)?;
+        let scroll_rows = sizes(top, MAX_ROWS, MAX_VIEW_ROWS, scroll_height, row_height)?;
+        let last_col = left + scroll_cols.len() as i32 - 1;
+        let last_row = top + scroll_rows.len() as i32 - 1;
+        col_widths.extend(scroll_cols);
+        row_heights.extend(scroll_rows);
+
+        let col_on_screen = |col: i32| col <= frozen_cols || (left..=last_col).contains(&col);
+        let row_on_screen = |row: i32| row <= frozen_rows || (top..=last_row).contains(&row);
         let mut cells = Vec::new();
         // Áreas mescladas que cruzam a tela. A célula principal de cada uma
         // entra na lista mesmo estando fora, porque é ela que tem o conteúdo.
         let mut merges = Vec::new();
         for merge in self.model.get_merged_cells(sheet)? {
-            let on_screen = merge.row <= last_row
-                && merge.row + merge.height > top
-                && merge.column <= last_col
-                && merge.column + merge.width > left;
-            if !on_screen {
+            let touches_rows = (merge.row..merge.row + merge.height).any(row_on_screen)
+                || (merge.row < top && merge.row + merge.height > top);
+            let touches_cols = (merge.column..merge.column + merge.width).any(col_on_screen)
+                || (merge.column < left && merge.column + merge.width > left);
+            if !touches_rows || !touches_cols {
                 continue;
             }
             merges.push(Range {
@@ -353,18 +410,338 @@ impl Engine {
                 cols: merge.width as u32,
                 rows: merge.height as u32,
             });
-            if merge.row < top || merge.column < left {
+            if !row_on_screen(merge.row) || !col_on_screen(merge.column) {
                 cells.extend(self.cell_view(sheet, merge.row, merge.column)?);
             }
         }
         // Percorre a tela inteira, e não só a parte com dados, porque uma
         // linha ou coluna formatada por inteiro tem estilo em células vazias.
-        for row in top..=last_row {
-            for col in left..=last_col {
+        for row in (1..=frozen_rows).chain(top..=last_row) {
+            for col in (1..=frozen_cols).chain(left..=last_col) {
                 cells.extend(self.cell_view(sheet, row, col)?);
             }
         }
-        Ok(View { col_widths, row_heights, cells, merges })
+        Ok(View {
+            frozen_cols: frozen_cols as u32,
+            frozen_rows: frozen_rows as u32,
+            col_widths,
+            row_heights,
+            cells,
+            merges,
+        })
+    }
+
+    /// Congela as primeiras `cols` colunas e `rows` linhas; zero descongela.
+    pub fn set_frozen(&mut self, sheet: u32, cols: u32, rows: u32) -> Result<(), String> {
+        let depth = self.model.undo_depth();
+        let result = self
+            .model
+            .set_frozen_columns_count(sheet, to_i32(cols)?)
+            .and_then(|()| self.model.set_frozen_rows_count(sheet, to_i32(rows)?));
+        self.model.group_undo_since(depth);
+        result
+    }
+
+    /// Oculta ou reexibe `count` linhas ou colunas a partir de `first`, como
+    /// um único passo de desfazer.
+    pub fn set_hidden(&mut self, sheet: u32, axis: Axis, first: u32, count: u32, hidden: bool) -> Result<(), String> {
+        let (limit, name) = match axis {
+            Axis::Rows => (MAX_ROWS, "linhas"),
+            Axis::Cols => (MAX_COLS, "colunas"),
+        };
+        let start = to_i32(first)?.saturating_add(1);
+        let end = start.saturating_add(to_i32(count)?).saturating_sub(1).min(limit);
+        if count == 0 || start > limit {
+            return Err(format!("não há {name} nesse intervalo"));
+        }
+        // Ao reexibir, mexe só no que está oculto: a seleção pode ser a
+        // planilha inteira, e o motor trata as linhas uma a uma.
+        let runs = if hidden {
+            if i64::from(end - start) >= MAX_HIDE {
+                return Err(format!("são {name} demais para ocultar de uma vez"));
+            }
+            vec![(start, end)]
+        } else {
+            self.hidden_runs(sheet, axis, start, end)?
+        };
+        let depth = self.model.undo_depth();
+        let mut result = Ok(());
+        for (from, to) in runs {
+            result = match axis {
+                Axis::Rows => self.model.set_rows_hidden(sheet, from, to, hidden),
+                Axis::Cols => self.model.set_columns_hidden(sheet, from, to, hidden),
+            };
+            if result.is_err() {
+                break;
+            }
+        }
+        self.model.group_undo_since(depth);
+        result
+    }
+
+    /// Sequências de linhas ou colunas ocultas entre `start` e `end` (a
+    /// partir de um, como no IronCalc).
+    fn hidden_runs(&self, sheet: u32, axis: Axis, start: i32, end: i32) -> Result<Vec<(i32, i32)>, String> {
+        let worksheet = self.model.get_model().workbook.worksheet(sheet)?;
+        let mut runs: Vec<(i32, i32)> = match axis {
+            Axis::Rows => worksheet.rows.iter().filter(|row| row.hidden).map(|row| (row.r, row.r)).collect(),
+            Axis::Cols => worksheet.cols.iter().filter(|col| col.hidden).map(|col| (col.min, col.max)).collect(),
+        };
+        runs.retain(|(from, to)| *from <= end && *to >= start);
+        runs.sort_unstable();
+        let mut merged: Vec<(i32, i32)> = Vec::new();
+        for (from, to) in runs {
+            let (from, to) = (from.max(start), to.min(end));
+            match merged.last_mut() {
+                Some(last) if from <= last.1 + 1 => last.1 = last.1.max(to),
+                _ => merged.push((from, to)),
+            }
+        }
+        Ok(merged)
+    }
+
+    /// Células da planilha em que o texto aparece, sem diferenciar maiúsculas
+    /// de minúsculas, no que foi digitado ou no que é mostrado. Em ordem de
+    /// leitura: linha a linha, da esquerda para a direita.
+    pub fn find(&self, sheet: u32, query: &str) -> Result<Vec<CellPos>, String> {
+        if query.is_empty() {
+            return Ok(Vec::new());
+        }
+        let positions: Vec<(i32, i32)> = {
+            let worksheet = self.model.get_model().workbook.worksheet(sheet)?;
+            worksheet.sheet_data.cells().map(|(row, col, _)| (row, col)).collect()
+        };
+        let mut found = Vec::new();
+        for (row, col) in positions {
+            let matches = find_ignoring_case(&self.model.get_cell_content(sheet, row, col)?, query).is_some()
+                || find_ignoring_case(&self.model.get_formatted_cell_value(sheet, row, col)?, query).is_some();
+            if matches {
+                found.push(CellPos { col: (col - 1) as u32, row: (row - 1) as u32 });
+            }
+        }
+        found.sort_by_key(|cell| (cell.row, cell.col));
+        Ok(found)
+    }
+
+    /// Troca o texto procurado pelo novo no conteúdo de uma célula. Devolve
+    /// `false` se o conteúdo digitado não contém o texto (o texto pode estar
+    /// só no valor mostrado, como no resultado de uma fórmula).
+    pub fn replace(&mut self, sheet: u32, col: u32, row: u32, query: &str, replacement: &str) -> Result<bool, String> {
+        let (ic_row, ic_col) = to_ironcalc(col, row)?;
+        let input = self.model.get_cell_content(sheet, ic_row, ic_col)?;
+        match replace_ignoring_case(&input, query, replacement) {
+            Some(replaced) => self.set_cell(sheet, col, row, &replaced).map(|()| true),
+            None => Ok(false),
+        }
+    }
+
+    /// Troca o texto em todas as células da planilha, como um único passo de
+    /// desfazer. Devolve quantas células mudaram.
+    pub fn replace_all(&mut self, sheet: u32, query: &str, replacement: &str) -> Result<u32, String> {
+        let depth = self.model.undo_depth();
+        let mut changed = 0;
+        let mut result = Ok(());
+        for cell in self.find(sheet, query)? {
+            match self.replace(sheet, cell.col, cell.row, query, replacement) {
+                Ok(true) => changed += 1,
+                Ok(false) => {}
+                Err(error) => {
+                    result = Err(error);
+                    break;
+                }
+            }
+        }
+        self.model.group_undo_since(depth);
+        result.map(|()| changed)
+    }
+
+    /// A tabela em volta de uma célula: o maior retângulo de células
+    /// preenchidas e vizinhas entre si que a contém.
+    pub fn data_region(&self, sheet: u32, col: u32, row: u32) -> Result<Range, String> {
+        let (row, col) = to_ironcalc(col, row)?;
+        let filled = |row: i32, col: i32| -> Result<bool, String> {
+            Ok((1..=MAX_ROWS).contains(&row)
+                && (1..=MAX_COLS).contains(&col)
+                && !self.model.get_cell_content(sheet, row, col)?.is_empty())
+        };
+        let (mut top, mut bottom, mut left, mut right) = (row, row, col, col);
+        // Cresce para cada lado enquanto a faixa vizinha tiver algo.
+        loop {
+            let mut grew = false;
+            let strip_has = |rows: std::ops::RangeInclusive<i32>, cols: std::ops::RangeInclusive<i32>| {
+                for r in rows {
+                    for c in cols.clone() {
+                        if filled(r, c)? {
+                            return Ok::<bool, String>(true);
+                        }
+                    }
+                }
+                Ok(false)
+            };
+            if strip_has(top - 1..=top - 1, left - 1..=right + 1)? {
+                top -= 1;
+                grew = true;
+            }
+            if strip_has(bottom + 1..=bottom + 1, left - 1..=right + 1)? {
+                bottom += 1;
+                grew = true;
+            }
+            if strip_has(top..=bottom, left - 1..=left - 1)? {
+                left -= 1;
+                grew = true;
+            }
+            if strip_has(top..=bottom, right + 1..=right + 1)? {
+                right += 1;
+                grew = true;
+            }
+            if !grew || (bottom - top + 1) as u64 * (right - left + 1) as u64 > 1_000_000 {
+                break;
+            }
+        }
+        Ok(Range {
+            col: (left - 1) as u32,
+            row: (top - 1) as u32,
+            cols: (right - left + 1) as u32,
+            rows: (bottom - top + 1) as u32,
+        })
+    }
+
+    /// Classifica linhas pelo valor da coluna `key_col` e devolve o intervalo
+    /// classificado. Números vêm antes de textos e as células vazias ficam
+    /// sempre no fim.
+    ///
+    /// Com uma célula só selecionada, classifica a tabela em volta dela; se a
+    /// primeira linha dessa tabela for um cabeçalho (um texto sobre uma
+    /// coluna de números), ela fica no lugar. Com várias células selecionadas,
+    /// classifica exatamente a seleção.
+    pub fn sort(&mut self, sheet: u32, selection: Range, key_col: u32, descending: bool) -> Result<Range, String> {
+        let mut range = selection;
+        if selection.cols == 1 && selection.rows == 1 {
+            range = self.data_region(sheet, selection.col, selection.row)?;
+            if range.rows > 1 && self.looks_like_header(sheet, key_col, range.row)? {
+                range.row += 1;
+                range.rows -= 1;
+            }
+        }
+        if !(range.col..range.col + range.cols).contains(&key_col) {
+            return Err("a coluna de classificação precisa estar dentro do intervalo".into());
+        }
+        let area = small_area(sheet, range)?;
+        // As linhas ocultas continuariam ocultas no mesmo lugar, escondendo
+        // outros dados: um filtro deixaria de mostrar o que diz.
+        if !self.hidden_runs(sheet, Axis::Rows, area.row, area.row + area.height - 1)?.is_empty() {
+            return Err("há linhas ocultas no intervalo; limpe o filtro ou reexiba as linhas antes".into());
+        }
+        let (first_col, last_col) = (area.column, area.column + area.width - 1);
+        let key_column = to_i32(key_col)? + 1;
+
+        // Ordem das linhas de origem. A ordenação é estável: empates mantêm
+        // a ordem em que estavam.
+        let mut keys = Vec::new();
+        for row in area.row..area.row + area.height {
+            keys.push((row, self.model.get_model().get_cell_value_by_index(sheet, row, key_column)?));
+        }
+        keys.sort_by(|(_, a), (_, b)| compare_values(a, b, descending));
+
+        // Copia tudo antes de mexer, e então cola cada linha no lugar novo.
+        // Colar ajusta as referências das fórmulas à nova linha.
+        self.select(sheet, area.row, first_col, area.row + area.height - 1, last_col)?;
+        let invalid = |e: serde_json::Error| format!("cópia inválida: {e}");
+        let mut clipboard = serde_json::to_value(self.model.copy_to_clipboard()?).map_err(invalid)?;
+        let mut data: ClipboardData = serde_json::from_value(clipboard["data"].take()).map_err(invalid)?;
+
+        let depth = self.model.undo_depth();
+        let mut result = Ok(());
+        for (index, (source, _)) in keys.iter().enumerate() {
+            let target = area.row + index as i32;
+            let Some(cells) = data.remove(source) else {
+                continue;
+            };
+            if *source == target {
+                continue;
+            }
+            let moved = ClipboardData::from([(*source, cells)]);
+            result = self.select(sheet, target, first_col, target, first_col).and_then(|()| {
+                self.model.paste_from_clipboard(sheet, (*source, first_col, *source, last_col), &moved, false)
+            });
+            if result.is_err() {
+                break;
+            }
+        }
+        self.model.group_undo_since(depth);
+        result.map(|()| range)
+    }
+
+    /// Diz se a linha parece um cabeçalho da coluna: um texto logo acima de um número.
+    fn looks_like_header(&self, sheet: u32, col: u32, row: u32) -> Result<bool, String> {
+        let (row, col) = to_ironcalc(col, row)?;
+        let model = self.model.get_model();
+        Ok(matches!(model.get_cell_value_by_index(sheet, row, col)?, CellValue::String(_))
+            && matches!(model.get_cell_value_by_index(sheet, row + 1, col)?, CellValue::Number(_)))
+    }
+
+    /// Valores que dá para filtrar na coluna da célula dada. A tabela é a que
+    /// está em volta da célula, e a primeira linha dela é o cabeçalho.
+    pub fn filter_options(&self, sheet: u32, col: u32, row: u32) -> Result<FilterOptions, String> {
+        let mut range = self.data_region(sheet, col, row)?;
+        if range.rows < 2 {
+            return Err("não há uma tabela com cabeçalho e dados em volta desta célula".into());
+        }
+        range.row += 1;
+        range.rows -= 1;
+        let area = small_area(sheet, range)?;
+        let column = to_i32(col)? + 1;
+        let mut values: Vec<FilterValue> = Vec::new();
+        for row in area.row..area.row + area.height {
+            let text = self.model.get_formatted_cell_value(sheet, row, column)?;
+            let shown = !self.model.get_model().is_row_hidden(sheet, row)?;
+            match values.iter_mut().find(|value| value.text == text) {
+                Some(value) => value.shown |= shown,
+                None => values.push(FilterValue { text, shown }),
+            }
+        }
+        values.sort_by_key(|value| value.text.to_lowercase());
+        Ok(FilterOptions { range, col, values })
+    }
+
+    /// Filtra as linhas do intervalo pelos valores da coluna, como um único
+    /// passo de desfazer: oculta as que têm um valor fora de `allowed` e
+    /// reexibe as que têm um valor de `allowed` que estava todo oculto. As
+    /// demais ficam como estão, para o filtro de outra coluna continuar
+    /// valendo. Devolve quantas linhas do intervalo ficaram ocultas.
+    pub fn apply_filter(&mut self, sheet: u32, range: Range, col: u32, allowed: &[String]) -> Result<u32, String> {
+        let area = small_area(sheet, range)?;
+        let column = to_i32(col)? + 1;
+        let mut rows = Vec::new();
+        for row in area.row..area.row + area.height {
+            let text = self.model.get_formatted_cell_value(sheet, row, column)?;
+            let hidden = self.model.get_model().is_row_hidden(sheet, row)?;
+            rows.push((text, hidden));
+        }
+        let was_shown = |text: &String| rows.iter().any(|(other, hidden)| other == text && !hidden);
+        let hide: Vec<bool> = rows
+            .iter()
+            .map(|(text, hidden)| if allowed.contains(text) { *hidden && was_shown(text) } else { true })
+            .collect();
+
+        let depth = self.model.undo_depth();
+        let mut result = Ok(());
+        // Uma chamada por sequência de linhas que mudam para o mesmo estado.
+        let changes = |index: usize| hide[index] != rows[index].1;
+        let mut start = 0;
+        while start < hide.len() && result.is_ok() {
+            let mut end = start;
+            while end + 1 < hide.len() && hide[end + 1] == hide[start] && changes(end + 1) == changes(start) {
+                end += 1;
+            }
+            if changes(start) {
+                let (first, last) = (area.row + start as i32, area.row + end as i32);
+                result = self.model.set_rows_hidden(sheet, first, last, hide[start]);
+            }
+            start = end + 1;
+        }
+        self.model.group_undo_since(depth);
+        result.map(|()| hide.iter().filter(|hidden| **hidden).count() as u32)
     }
 
     /// O que desenhar numa célula (linha e coluna a partir de um), ou `None`
@@ -627,6 +1004,66 @@ fn sizes(
     Ok(sizes)
 }
 
+/// Posição (em bytes) e tamanho do primeiro trecho de `text` igual a `query`,
+/// sem diferenciar maiúsculas de minúsculas.
+fn find_ignoring_case(text: &str, query: &str) -> Option<(usize, usize)> {
+    if query.is_empty() {
+        return None;
+    }
+    let lower = |c: char| c.to_lowercase();
+    text.char_indices().find_map(|(start, _)| {
+        let mut rest = text[start..].chars();
+        let mut length = 0;
+        for expected in query.chars() {
+            let found = rest.next()?;
+            if !lower(found).eq(lower(expected)) {
+                return None;
+            }
+            length += found.len_utf8();
+        }
+        Some((start, length))
+    })
+}
+
+/// Troca todas as ocorrências de `query` em `text`, sem diferenciar
+/// maiúsculas de minúsculas. `None` se não houver nenhuma.
+fn replace_ignoring_case(text: &str, query: &str, replacement: &str) -> Option<String> {
+    let mut result = String::new();
+    let mut rest = text;
+    let mut replaced = false;
+    while let Some((start, length)) = find_ignoring_case(rest, query) {
+        result.push_str(&rest[..start]);
+        result.push_str(replacement);
+        rest = &rest[start + length..];
+        replaced = true;
+    }
+    result.push_str(rest);
+    replaced.then_some(result)
+}
+
+/// Ordem de classificação entre dois valores: números, depois textos (sem
+/// diferenciar maiúsculas), depois lógicos; vazios sempre por último, mesmo
+/// na ordem decrescente.
+fn compare_values(a: &CellValue, b: &CellValue, descending: bool) -> std::cmp::Ordering {
+    use std::cmp::Ordering;
+    let rank = |value: &CellValue| match value {
+        CellValue::Number(_) => 0,
+        CellValue::String(_) => 1,
+        CellValue::Boolean(_) => 2,
+        CellValue::None => 3,
+    };
+    if matches!(a, CellValue::None) || matches!(b, CellValue::None) {
+        return rank(a).cmp(&rank(b));
+    }
+    let order = match (a, b) {
+        (CellValue::Number(x), CellValue::Number(y)) => x.partial_cmp(y).unwrap_or(Ordering::Equal),
+        (CellValue::String(x), CellValue::String(y)) => x.to_lowercase().cmp(&y.to_lowercase()),
+        (CellValue::Boolean(x), CellValue::Boolean(y)) => x.cmp(y),
+        _ => rank(a).cmp(&rank(b)),
+    };
+    if descending { order.reverse() } else { order }
+}
+
 /// Compara dois textos de área de transferência, ignorando o tipo de quebra
 /// de linha e os espaços nas pontas, que mudam de um programa para outro.
 fn same_text(a: &str, b: &str) -> bool {
@@ -686,7 +1123,10 @@ mod tests {
     }
 
     fn cell_in(engine: &Engine, sheet: u32, col: u32, row: u32) -> Option<CellView> {
-        engine.view(sheet, col, row, 1.0, 1.0).unwrap().cells.pop()
+        // A tela pode trazer mais células (congeladas, ou vizinhas de uma
+        // linha oculta): fica só a que foi pedida.
+        let cells = engine.view(sheet, col, row, 1.0, 1.0).unwrap().cells;
+        cells.into_iter().find(|cell| cell.col == col && cell.row == row)
     }
 
     fn cell(engine: &Engine, col: u32, row: u32) -> Option<CellView> {
@@ -764,7 +1204,10 @@ mod tests {
         assert_eq!((text.input.as_str(), text.display.as_str(), &text.kind), ("Janeiro", "Janeiro", &CellKind::Text));
         assert_eq!(text.style, None);
         let formula = cell(&e, 2, 0).unwrap();
-        assert_eq!((formula.input.as_str(), formula.display.as_str(), &formula.kind), ("=B1*2", "3", &CellKind::Number));
+        assert_eq!(
+            (formula.input.as_str(), formula.display.as_str(), &formula.kind),
+            ("=B1*2", "3", &CellKind::Number)
+        );
         let error = cell(&e, 3, 0).unwrap();
         assert_eq!((error.display.as_str(), &error.kind), ("#DIV/0!", &CellKind::Error));
     }
@@ -972,6 +1415,234 @@ mod tests {
     }
 
     #[test]
+    fn frozen_panes_stay_on_screen() {
+        let mut e = engine(&[(0, 0, "canto"), (5, 0, "topo"), (0, 30, "lado"), (5, 30, "meio")]);
+        e.set_frozen(0, 1, 2).unwrap();
+
+        // Rolando para longe, a primeira coluna e as duas primeiras linhas continuam.
+        let view = e.view(0, 5, 30, 300.0, 100.0).unwrap();
+        assert_eq!((view.frozen_cols, view.frozen_rows), (1, 2));
+        // 90 da coluna congelada + 210 de rolagem; 50 das linhas congeladas + 50.
+        assert_eq!(view.col_widths, [90.0, 90.0, 90.0, 90.0]);
+        assert_eq!(view.row_heights, [25.0, 25.0, 25.0, 25.0]);
+        let mut shown: Vec<(u32, u32, String)> = view.cells.into_iter().map(|c| (c.col, c.row, c.display)).collect();
+        shown.sort();
+        assert_eq!(
+            shown,
+            [(0, 0, "canto".into()), (0, 30, "lado".into()), (5, 0, "topo".into()), (5, 30, "meio".into())]
+        );
+
+        // A parte que rola nunca começa dentro da congelada.
+        let start = e.view(0, 0, 0, 300.0, 100.0).unwrap();
+        assert_eq!(start.col_widths.len(), 4);
+        assert_eq!(start.cells.iter().filter(|c| c.display == "canto").count(), 1);
+
+        // Congelar é um passo só de desfazer.
+        e.undo().unwrap();
+        assert_eq!(e.view(0, 5, 30, 300.0, 100.0).unwrap().frozen_cols, 0);
+        assert_eq!(e.view(0, 5, 30, 300.0, 100.0).unwrap().frozen_rows, 0);
+    }
+
+    #[test]
+    fn hides_and_shows_rows_and_columns() {
+        let mut e = engine(&[(0, 0, "a"), (1, 0, "b"), (2, 0, "c")]);
+        e.set_hidden(0, Axis::Cols, 1, 1, true).unwrap();
+        e.set_hidden(0, Axis::Rows, 2, 2, true).unwrap();
+        let view = e.view(0, 0, 0, 270.0, 100.0).unwrap();
+        // A coluna oculta tem largura zero e a tela busca mais uma para compensar.
+        assert_eq!(view.col_widths, [90.0, 0.0, 90.0, 90.0]);
+        assert_eq!(view.row_heights, [25.0, 25.0, 0.0, 0.0, 25.0, 25.0]);
+
+        e.set_hidden(0, Axis::Cols, 0, 3, false).unwrap();
+        assert_eq!(e.view(0, 0, 0, 270.0, 100.0).unwrap().col_widths, [90.0, 90.0, 90.0]);
+        e.undo().unwrap();
+        assert_eq!(e.view(0, 0, 0, 270.0, 100.0).unwrap().col_widths[1], 0.0);
+        assert!(e.set_hidden(0, Axis::Rows, 0, 0, true).is_err());
+
+        // Reexibir a planilha inteira mexe só no que está oculto, de uma vez.
+        e.set_hidden(0, Axis::Rows, 7, 1, true).unwrap();
+        e.set_hidden(0, Axis::Rows, 0, MAX_ROWS as u32, false).unwrap();
+        e.set_hidden(0, Axis::Cols, 0, MAX_COLS as u32, false).unwrap();
+        let all = e.view(0, 0, 0, 270.0, 250.0).unwrap();
+        assert!(all.row_heights.iter().chain(&all.col_widths).all(|size| *size > 0.0));
+        e.undo().unwrap();
+        e.undo().unwrap();
+        let back = e.view(0, 0, 0, 270.0, 250.0).unwrap();
+        assert_eq!(back.row_heights[..8], [25.0, 25.0, 0.0, 0.0, 25.0, 25.0, 25.0, 0.0]);
+        assert_eq!(back.col_widths[1], 0.0);
+        assert!(e.set_hidden(0, Axis::Rows, 0, MAX_ROWS as u32, true).is_err());
+    }
+
+    #[test]
+    fn finds_and_replaces() {
+        let mut e = engine(&[
+            (0, 0, "Ana Lima"),
+            (1, 0, "ana@exemplo.com"),
+            (0, 1, "Bruno"),
+            (1, 1, "=A1&\" e Ana\""),
+            (0, 2, "1500"),
+            (1, 2, "=A3*2"),
+        ]);
+        let cells = |found: Vec<CellPos>| found.into_iter().map(|c| (c.col, c.row)).collect::<Vec<_>>();
+        // Sem diferenciar maiúsculas, em ordem de leitura, olhando o que foi
+        // digitado e o que é mostrado.
+        assert_eq!(cells(e.find(0, "ANA").unwrap()), [(0, 0), (1, 0), (1, 1)]);
+        assert_eq!(cells(e.find(0, "3000").unwrap()), [(1, 2)]);
+        assert_eq!(cells(e.find(0, "não tem").unwrap()), []);
+        assert_eq!(cells(e.find(0, "").unwrap()), []);
+
+        assert!(e.replace(0, 0, 0, "ana", "Bia").unwrap());
+        assert_eq!(shown(&e, 0, 0), "Bia Lima");
+        // O 3000 só existe no resultado da fórmula: não há o que trocar.
+        assert!(!e.replace(0, 1, 2, "3000", "1").unwrap());
+        assert_eq!(cell(&e, 1, 2).unwrap().input, "=A3*2");
+
+        let changed = e.replace_all(0, "ana", "Eva").unwrap();
+        assert_eq!(changed, 2);
+        assert_eq!(shown(&e, 1, 0), "Eva@exemplo.com");
+        assert_eq!(shown(&e, 1, 1), "Bia Lima e Eva");
+        // Trocar tudo se desfaz de uma vez.
+        e.undo().unwrap();
+        assert_eq!(shown(&e, 1, 0), "ana@exemplo.com");
+        assert_eq!(cell(&e, 1, 1).unwrap().input, "=A1&\" e Ana\"");
+        assert_eq!(shown(&e, 0, 0), "Bia Lima");
+    }
+
+    #[test]
+    fn text_search_helpers() {
+        assert_eq!(find_ignoring_case("São Paulo", "PAULO"), Some((5, 5)));
+        assert_eq!(find_ignoring_case("MÉDIA", "édi"), Some((1, 4)));
+        assert_eq!(find_ignoring_case("abc", "abcd"), None);
+        assert_eq!(replace_ignoring_case("Ana e ana", "ANA", "Bia").as_deref(), Some("Bia e Bia"));
+        assert_eq!(replace_ignoring_case("aaa", "aa", "b").as_deref(), Some("ba"));
+        assert_eq!(replace_ignoring_case("abc", "x", "y"), None);
+    }
+
+    /// Tabela usada nos testes de classificar e filtrar, a partir de B2.
+    fn people() -> Engine {
+        engine(&[
+            (1, 1, "Nome"),
+            (2, 1, "Idade"),
+            (3, 1, "Dobro"),
+            (1, 2, "Carla"),
+            (2, 2, "30"),
+            (3, 2, "=C3*2"),
+            (1, 3, "ana"),
+            (2, 3, "25"),
+            (3, 3, "=C4*2"),
+            (1, 4, "Bruno"),
+            (2, 4, "41"),
+            (3, 4, "=C5*2"),
+            (1, 5, "Davi"),
+            (2, 5, "25"),
+            (3, 5, "=C6*2"),
+            (6, 1, "longe"),
+        ])
+    }
+
+    fn column(e: &Engine, col: u32, rows: std::ops::Range<u32>) -> Vec<String> {
+        rows.map(|row| shown(e, col, row)).collect()
+    }
+
+    #[test]
+    fn finds_the_table_around_a_cell() {
+        let e = people();
+        // De qualquer célula da tabela, e sem juntar o que está separado por uma coluna vazia.
+        assert_eq!(e.data_region(0, 2, 3).unwrap(), range(1, 1, 3, 5));
+        assert_eq!(e.data_region(0, 1, 1).unwrap(), range(1, 1, 3, 5));
+        assert_eq!(e.data_region(0, 6, 1).unwrap(), range(6, 1, 1, 1));
+        assert_eq!(e.data_region(0, 9, 9).unwrap(), range(9, 9, 1, 1));
+    }
+
+    #[test]
+    fn sorts_the_table_keeping_the_header() {
+        let mut e = people();
+        // Pela idade, a partir de uma célula só: o cabeçalho fica no lugar.
+        let sorted = e.sort(0, range(2, 3, 1, 1), 2, false).unwrap();
+        assert_eq!(sorted, range(1, 2, 3, 4));
+        assert_eq!(column(&e, 1, 1..6), ["Nome", "ana", "Davi", "Carla", "Bruno"]);
+        assert_eq!(column(&e, 2, 1..6), ["Idade", "25", "25", "30", "41"]);
+        // As fórmulas acompanham a linha.
+        assert_eq!(column(&e, 3, 2..6), ["50", "50", "60", "82"]);
+        assert_eq!(cell(&e, 3, 5).unwrap().input, "=C6*2");
+
+        e.sort(0, range(2, 3, 1, 1), 2, true).unwrap();
+        assert_eq!(column(&e, 1, 2..6), ["Bruno", "Carla", "ana", "Davi"]);
+
+        // Classificar é um passo só de desfazer.
+        e.undo().unwrap();
+        assert_eq!(column(&e, 1, 2..6), ["ana", "Davi", "Carla", "Bruno"]);
+    }
+
+    #[test]
+    fn sorts_exactly_the_selection() {
+        let mut e = people();
+        // Só as linhas de dados, pelo nome, sem diferenciar maiúsculas.
+        e.sort(0, range(1, 2, 3, 4), 1, false).unwrap();
+        assert_eq!(column(&e, 1, 1..6), ["Nome", "ana", "Bruno", "Carla", "Davi"]);
+        assert_eq!(column(&e, 2, 2..6), ["25", "41", "30", "25"]);
+
+        // Com linhas ocultas no meio, classificar bagunçaria o filtro.
+        e.set_hidden(0, Axis::Rows, 3, 1, true).unwrap();
+        assert!(e.sort(0, range(1, 2, 3, 4), 1, true).is_err());
+        assert_eq!(column(&e, 1, 2..6), ["ana", "Bruno", "Carla", "Davi"]);
+
+        // Vazias sempre no fim, nas duas ordens.
+        let mut gaps = engine(&[(0, 0, "2"), (0, 2, "texto"), (0, 3, "1")]);
+        gaps.sort(0, range(0, 0, 1, 4), 0, false).unwrap();
+        assert_eq!(column(&gaps, 0, 0..4), ["1", "2", "texto", ""]);
+        gaps.sort(0, range(0, 0, 1, 4), 0, true).unwrap();
+        assert_eq!(column(&gaps, 0, 0..4), ["texto", "2", "1", ""]);
+
+        assert!(e.sort(0, range(1, 2, 2, 4), 9, false).is_err());
+    }
+
+    #[test]
+    fn filters_rows_by_value() {
+        let mut e = people();
+        let options = e.filter_options(0, 2, 4).unwrap();
+        assert_eq!((options.range, options.col), (range(1, 2, 3, 4), 2));
+        let texts =
+            |options: &FilterOptions| options.values.iter().map(|v| (v.text.clone(), v.shown)).collect::<Vec<_>>();
+        assert_eq!(texts(&options), [("25".into(), true), ("30".into(), true), ("41".into(), true)]);
+
+        let hidden = e.apply_filter(0, options.range, 2, &["25".to_string()]).unwrap();
+        assert_eq!(hidden, 2);
+        // Linhas 3 (Carla, 30) e 5 (Bruno, 41) ficam com altura zero.
+        let heights = e.view(0, 0, 0, 90.0, 150.0).unwrap().row_heights;
+        assert_eq!(heights[..6], [25.0, 25.0, 0.0, 25.0, 0.0, 25.0]);
+        assert_eq!(
+            texts(&e.filter_options(0, 2, 4).unwrap()),
+            [("25".into(), true), ("30".into(), false), ("41".into(), false)]
+        );
+
+        // O filtro de outra coluna soma: só "ana", entre os de 25 anos.
+        let names = e.filter_options(0, 1, 2).unwrap();
+        assert_eq!(
+            texts(&names),
+            [("ana".into(), true), ("Bruno".into(), false), ("Carla".into(), false), ("Davi".into(), true)]
+        );
+        assert_eq!(e.apply_filter(0, names.range, 1, &["ana".to_string()]).unwrap(), 3);
+        assert_eq!(e.view(0, 0, 0, 90.0, 150.0).unwrap().row_heights[..6], [25.0, 25.0, 0.0, 25.0, 0.0, 0.0]);
+        // Marcar de volta o Davi reexibe só ele: o filtro de idade continua.
+        let both = ["ana".to_string(), "Davi".to_string()];
+        assert_eq!(e.apply_filter(0, names.range, 1, &both).unwrap(), 2);
+        assert_eq!(e.view(0, 0, 0, 90.0, 150.0).unwrap().row_heights[..6], [25.0, 25.0, 0.0, 25.0, 0.0, 25.0]);
+        // Marcar um valor que estava todo oculto reexibe as linhas dele.
+        let ages = ["25".to_string(), "41".to_string()];
+        assert_eq!(e.apply_filter(0, options.range, 2, &ages).unwrap(), 1);
+        assert_eq!(e.view(0, 0, 0, 90.0, 150.0).unwrap().row_heights[..6], [25.0, 25.0, 0.0, 25.0, 25.0, 25.0]);
+
+        // Cada filtro é um passo só de desfazer.
+        for _ in 0..4 {
+            e.undo().unwrap();
+        }
+        assert_eq!(e.view(0, 0, 0, 90.0, 150.0).unwrap().row_heights[..6], [25.0; 6]);
+
+        assert!(e.filter_options(0, 9, 9).is_err());
+    }
+
+    #[test]
     fn whole_rows_and_columns() {
         let mut e = engine(&[(1, 0, "10"), (1, 4, "20"), (2, 2, "fica")]);
         let column_b = range(1, 0, 1, 1_048_576);
@@ -1077,7 +1748,8 @@ mod tests {
     fn borders_and_wrap() {
         let mut e = engine(&[(0, 0, "texto bem comprido")]);
         e.set_border(0, range(0, 0, 2, 2), BorderKind::Outer).unwrap();
-        let thin = |style: &CellStyle, side: usize| style.borders[side].as_ref().map(|b| (b.color.clone(), b.width, b.dashed));
+        let thin =
+            |style: &CellStyle, side: usize| style.borders[side].as_ref().map(|b| (b.color.clone(), b.width, b.dashed));
         let black = Some(("#000000".to_string(), 1, false));
         // Ordem: cima, direita, baixo, esquerda.
         let top_left = cell(&e, 0, 0).unwrap().style.unwrap();

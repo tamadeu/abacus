@@ -2,6 +2,7 @@ import {
   createEngine,
   type BorderKind,
   type CellView,
+  type FilterOptions,
   type Range,
   type SheetInfo,
   type Structure,
@@ -32,6 +33,10 @@ const COLORS = {
   headerActiveInk: "#3730a3",
   accent: "#4f46e5",
   selection: "rgba(79, 70, 229, 0.1)",
+  /** Divisa entre a parte congelada e a que rola. */
+  frozenLine: "#9d9db5",
+  /** Fundo das células encontradas pelo "Localizar". */
+  found: "rgba(250, 204, 21, 0.4)",
   error: "#b42318",
 };
 
@@ -55,6 +60,13 @@ const mergeButton = $("#merge-btn");
 const borderSelect = $<HTMLSelectElement>("#borders");
 const valignSelect = $<HTMLSelectElement>("#valign");
 const suggest = $("#suggest");
+const findBar = $("#find");
+const findQuery = $<HTMLInputElement>("#find-query");
+const findCount = $("#find-count");
+const replaceText = $<HTMLInputElement>("#replace-text");
+const filterPanel = $("#filter");
+const filterTitle = $("#filter-title");
+const filterValues = $("#filter-values");
 
 /** Estilos que a barra de ferramentas liga e desliga. */
 type ToggleProperty = "bold" | "italic" | "underline" | "strike" | "wrap";
@@ -98,9 +110,14 @@ let cells = new Map<string, CellView>();
 let merges: Range[] = [];
 /** Células que ficam escondidas dentro de uma área mesclada, por "coluna,linha". */
 let covered = new Set<string>();
-/** Tamanhos das colunas e linhas da tela, a partir de `pos.origin`. */
+/**
+ * Tamanhos das colunas e linhas da tela: primeiro as congeladas, depois as
+ * que rolam, a partir de `pos.origin`. As ocultas têm tamanho zero.
+ */
 let colWidths: number[] = [];
 let rowHeights: number[] = [];
+/** Quantas colunas e linhas da planilha estão congeladas na tela. */
+let frozen = { cols: 0, rows: 0 };
 /** Posição em pixels de cada borda: `colX[i]` é onde começa a i-ésima coluna da tela. */
 let colX: number[] = [HEADER_WIDTH];
 let rowY: number[] = [HEADER_HEIGHT];
@@ -148,6 +165,11 @@ let fillTarget: { axis: "rows" | "cols"; to: number } | null = null;
 let fillDrag = false;
 /** Intervalo copiado ou recortado, que fica marcado com borda tracejada. */
 let copiedMark: { sheet: number; range: Range; cut: boolean } | null = null;
+/** Células encontradas pelo "Localizar", em ordem de leitura, e as mesmas por "coluna,linha". */
+let found: Cell[] = [];
+let foundKeys = new Set<string>();
+/** Filtro que o painel está montando: a tabela, a coluna e os valores dela. */
+let filtering: FilterOptions | null = null;
 /** Arquivo aberto, ou `null` para uma pasta nova. */
 let filePath: string | null = null;
 /** A pasta tem alterações que não estão no arquivo. */
@@ -210,13 +232,17 @@ function singleSelection(): boolean {
   return range.cols === block.cols && range.rows === block.rows;
 }
 
-/** Célula a um passo da ativa, pulando por cima da área mesclada em que ela está. */
+/**
+ * Célula a um passo da ativa, pulando por cima da área mesclada em que ela
+ * está e das linhas e colunas ocultas que estiverem na tela.
+ */
 function step(dx: number, dy: number): Cell {
   const block = blockOf(pos.anchor);
-  return {
-    col: dx > 0 ? block.col + block.cols : dx < 0 ? block.col - 1 : pos.anchor.col,
-    row: dy > 0 ? block.row + block.rows : dy < 0 ? block.row - 1 : pos.anchor.row,
-  };
+  let col = dx > 0 ? block.col + block.cols : dx < 0 ? block.col - 1 : pos.anchor.col;
+  let row = dy > 0 ? block.row + block.rows : dy < 0 ? block.row - 1 : pos.anchor.row;
+  while (dx !== 0 && col > 0 && col < MAX_COLS - 1 && colOnScreen(col) && colWidths[colBand(col)] === 0) col += dx;
+  while (dy !== 0 && row > 0 && row < MAX_ROWS - 1 && rowOnScreen(row) && rowHeights[rowBand(row)] === 0) row += dy;
+  return { col, row };
 }
 
 /** Quebra um texto em linhas que caibam na largura, sem cortar palavras. */
@@ -245,10 +271,26 @@ function edges(sizes: number[], start: number): number[] {
   return out;
 }
 
-/** Pixel onde começa a coluna, limitado à área visível. */
-const xOf = (col: number) => colX[clamp(col - pos.origin.col, colX.length - 1)];
+/**
+ * Faixa da tela (índice em `colWidths`) de uma coluna. As congeladas vêm
+ * primeiro; para as demais o índice pode cair fora da tela.
+ */
+const colBand = (col: number) => (col < frozen.cols ? col : col - pos.origin.col + frozen.cols);
+const rowBand = (row: number) => (row < frozen.rows ? row : row - pos.origin.row + frozen.rows);
+/** Coluna ou linha que ocupa uma faixa da tela. */
+const bandCol = (band: number) => (band < frozen.cols ? band : pos.origin.col + band - frozen.cols);
+const bandRow = (band: number) => (band < frozen.rows ? band : pos.origin.row + band - frozen.rows);
+/** A coluna está na tela: é congelada ou está na parte que rola, sem ter ficado para trás. */
+const colOnScreen = (col: number) => col < frozen.cols || (col >= pos.origin.col && colBand(col) < colWidths.length);
+const rowOnScreen = (row: number) => row < frozen.rows || (row >= pos.origin.row && rowBand(row) < rowHeights.length);
+
+/**
+ * Pixel onde começa a coluna, limitado à área visível: o que rolou para
+ * trás fica na divisa da parte congelada, e o que está adiante, no fim.
+ */
+const xOf = (col: number) => colX[Math.min(Math.max(colBand(col), Math.min(col, frozen.cols)), colX.length - 1)];
 /** Pixel onde começa a linha, limitado à área visível. */
-const yOf = (row: number) => rowY[clamp(row - pos.origin.row, rowY.length - 1)];
+const yOf = (row: number) => rowY[Math.min(Math.max(rowBand(row), Math.min(row, frozen.rows)), rowY.length - 1)];
 
 /** Índice da faixa que contém o pixel, dadas as bordas acumuladas. */
 function bandAt(bounds: number[], pixel: number): number {
@@ -290,13 +332,24 @@ function rectOf(range: Range) {
   return { left, top, width: xOf(range.col + range.cols) - left, height: yOf(range.row + range.rows) - top };
 }
 
+/**
+ * Índice, em `colX` ou `rowY`, da borda onde começa a coluna ou linha
+ * `index`, ou -1 se essa borda não está na tela.
+ */
+function edgeBand(index: number, frozenCount: number, bandOf: (index: number) => number, edgeCount: number): number {
+  if (index <= frozenCount) return index;
+  const band = bandOf(index);
+  return band > frozenCount && band < edgeCount ? band : -1;
+}
+
 /** Centro da alça de preenchimento, ou `null` se o canto da seleção não está na tela. */
 function fillHandle(): { x: number; y: number } | null {
   if (editMode !== null) return null;
   const range = selectedRange();
-  const colIndex = range.col + range.cols - pos.origin.col;
-  const rowIndex = range.row + range.rows - pos.origin.row;
-  if (colIndex < 1 || colIndex >= colX.length || rowIndex < 1 || rowIndex >= rowY.length) return null;
+  // Borda depois da última coluna e da última linha da seleção.
+  const colIndex = edgeBand(range.col + range.cols, frozen.cols, colBand, colX.length);
+  const rowIndex = edgeBand(range.row + range.rows, frozen.rows, rowBand, rowY.length);
+  if (colIndex < 0 || rowIndex < 0) return null;
   return { x: colX[colIndex], y: rowY[rowIndex] };
 }
 
@@ -323,8 +376,8 @@ function formulaDraft(): string | null {
 /** Célula sob um ponto do canvas. */
 function cellAt(px: number, py: number): Cell {
   return {
-    col: clamp(pos.origin.col + bandAt(colX, px), MAX_COLS - 1),
-    row: clamp(pos.origin.row + bandAt(rowY, py), MAX_ROWS - 1),
+    col: clamp(bandCol(bandAt(colX, px)), MAX_COLS - 1),
+    row: clamp(bandRow(bandAt(rowY, py)), MAX_ROWS - 1),
   };
 }
 
@@ -373,6 +426,14 @@ function draw() {
     const rect = rectOf(blockOf(cell));
     ctx.fillStyle = cell.style.fill;
     ctx.fillRect(rect.left + 1, rect.top + 1, rect.width, rect.height);
+  }
+
+  // Células encontradas pelo "Localizar"
+  ctx.fillStyle = COLORS.found;
+  for (const cell of found) {
+    if (!colOnScreen(cell.col) || !rowOnScreen(cell.row)) continue;
+    const rect = rectOf(blockOf(cell));
+    ctx.fillRect(rect.left + 1, rect.top + 1, rect.width - 1, rect.height - 1);
   }
 
   // Bordas, cada uma no lado da sua célula: cima, direita, baixo, esquerda
@@ -429,8 +490,10 @@ function draw() {
     let clipWidth = cellWidth;
     if (cell.kind === "text" && align === "left" && !wraps && block.cols === 1) {
       const needed = ctx.measureText(text).width + 2 * PADDING;
-      const lastCol = origin.col + colWidths.length - 1;
+      const lastCol = bandCol(colWidths.length - 1);
       for (let next = cell.col + 1; needed > clipWidth && next <= lastCol; next++) {
+        // Da parte congelada não passa para a que rola se há colunas escondidas entre elas.
+        if (next === frozen.cols && origin.col !== frozen.cols) break;
         if (cells.get(key(next, cell.row))?.display || mergeAt({ col: next, row: cell.row })) break;
         clipWidth = xOf(next + 1) - left;
       }
@@ -541,15 +604,40 @@ function draw() {
   ctx.font = `13px ${FONT}`;
   ctx.textAlign = "center";
   colWidths.forEach((colWidth, index) => {
-    const col = origin.col + index;
+    if (colWidth < 12) return;
+    const col = bandCol(index);
     ctx.fillStyle = inRange(col, range.col, range.cols) ? COLORS.headerActiveInk : COLORS.muted;
     ctx.fillText(colName(col), colX[index] + colWidth / 2, HEADER_HEIGHT / 2);
   });
   rowHeights.forEach((rowHeight, index) => {
-    const row = origin.row + index;
+    if (rowHeight < 10) return;
+    const row = bandRow(index);
     ctx.fillStyle = inRange(row, range.row, range.rows) ? COLORS.headerActiveInk : COLORS.muted;
     ctx.fillText(String(row + 1), HEADER_WIDTH / 2, rowY[index] + rowHeight / 2);
   });
+
+  // Marca no cabeçalho onde há colunas ou linhas ocultas.
+  ctx.fillStyle = COLORS.accent;
+  colWidths.forEach((colWidth, index) => {
+    if (colWidth === 0 && colWidths[index - 1] !== 0) ctx.fillRect(colX[index] - 1, 4, 3, HEADER_HEIGHT - 8);
+  });
+  rowHeights.forEach((rowHeight, index) => {
+    if (rowHeight === 0 && rowHeights[index - 1] !== 0) ctx.fillRect(6, rowY[index] - 1, HEADER_WIDTH - 12, 3);
+  });
+
+  // Divisa da parte congelada
+  ctx.strokeStyle = COLORS.frozenLine;
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  if (frozen.cols > 0) {
+    ctx.moveTo(colX[frozen.cols] + 0.5, 0);
+    ctx.lineTo(colX[frozen.cols] + 0.5, height);
+  }
+  if (frozen.rows > 0) {
+    ctx.moveTo(0, rowY[frozen.rows] + 0.5);
+    ctx.lineTo(width, rowY[frozen.rows] + 0.5);
+  }
+  ctx.stroke();
 
   positionEditor();
 }
@@ -557,9 +645,7 @@ function draw() {
 /** Põe o editor sobre a célula ativa, largo o bastante para o texto. */
 function positionEditor() {
   if (editMode === null) return;
-  const colIndex = pos.anchor.col - pos.origin.col;
-  const rowIndex = pos.anchor.row - pos.origin.row;
-  if (colIndex < 0 || colIndex >= colWidths.length || rowIndex < 0 || rowIndex >= rowHeights.length) {
+  if (!colOnScreen(pos.anchor.col) || !rowOnScreen(pos.anchor.row)) {
     // A célula saiu da tela com a rolagem: a edição continua, fora de vista.
     editor.style.left = "-9999px";
     return;
@@ -774,6 +860,8 @@ function syncDocument() {
 function markModified() {
   modified = true;
   syncDocument();
+  // O que foi encontrado pode ter mudado de lugar ou deixado de existir.
+  if (!findBar.hidden) void runFind();
 }
 
 /** Busca no motor o que cabe na tela e redesenha. */
@@ -784,6 +872,10 @@ async function refresh() {
     const view = await engine.view(sheet, pos.origin.col, pos.origin.row, width, height);
     colWidths = view.colWidths;
     rowHeights = view.rowHeights;
+    frozen = { cols: view.frozenCols, rows: view.frozenRows };
+    // A parte que rola nunca começa dentro da congelada.
+    pos.origin.col = Math.max(pos.origin.col, frozen.cols);
+    pos.origin.row = Math.max(pos.origin.row, frozen.rows);
     colX = edges(colWidths, HEADER_WIDTH);
     rowY = edges(rowHeights, HEADER_HEIGHT);
     cells = new Map(view.cells.map((cell) => [key(cell.col, cell.row), cell]));
@@ -807,18 +899,21 @@ async function refresh() {
 /** Rola o mínimo necessário para o foco da seleção ficar inteiro na tela. */
 async function reveal() {
   const { focus, origin } = pos;
-  origin.col = Math.min(origin.col, focus.col);
-  origin.row = Math.min(origin.row, focus.row);
+  // O que está congelado já está sempre na tela.
+  if (focus.col >= frozen.cols) origin.col = Math.min(origin.col, focus.col);
+  if (focus.row >= frozen.rows) origin.row = Math.min(origin.row, focus.row);
   await refresh();
   // As larguras variam, então avança uma coluna ou linha por vez e confere.
   for (let guard = 0; guard < 1000; guard++) {
-    const colIndex = focus.col - origin.col;
-    const rowIndex = focus.row - origin.row;
-    const colCut = colIndex > 0 && (colIndex >= colWidths.length || colX[colIndex + 1] > wrap.clientWidth);
-    const rowCut = rowIndex > 0 && (rowIndex >= rowHeights.length || rowY[rowIndex + 1] > wrap.clientHeight);
+    const colIndex = colBand(focus.col);
+    const rowIndex = rowBand(focus.row);
+    const colCut = focus.col > origin.col && (colIndex >= colWidths.length || colX[colIndex + 1] > wrap.clientWidth);
+    const rowCut = focus.row > origin.row && (rowIndex >= rowHeights.length || rowY[rowIndex + 1] > wrap.clientHeight);
     if (!colCut && !rowCut) break;
-    if (colCut) origin.col++;
-    if (rowCut) origin.row++;
+    // Um destino longe (o de uma busca, por exemplo) vai direto para perto do
+    // começo da tela, com um pouco do que vem antes; de perto, um passo por vez.
+    if (colCut) origin.col = colIndex >= colWidths.length ? Math.max(origin.col + 1, focus.col - 1) : origin.col + 1;
+    if (rowCut) origin.row = rowIndex >= rowHeights.length ? Math.max(origin.row + 1, focus.row - 3) : origin.row + 1;
     await refresh();
   }
 }
@@ -844,6 +939,22 @@ async function select(cell: Cell, extend = false) {
     draw();
     syncFormulaBar();
     syncToolbar();
+  }
+}
+
+/**
+ * Anda um passo com a célula ativa. `step` só pula as linhas e colunas
+ * ocultas que estão na tela; se o destino ainda for oculto, segue adiante.
+ */
+async function move(dx: number, dy: number) {
+  for (let guard = 0; guard < 100; guard++) {
+    const before = { ...pos.anchor };
+    await select(step(dx, dy));
+    const { anchor } = pos;
+    const hidden = (dx !== 0 && colWidths[colBand(anchor.col)] === 0) || (dy !== 0 && rowHeights[rowBand(anchor.row)] === 0);
+    if (!hidden) return;
+    // Não há nada visível nesse sentido: fica onde estava.
+    if (anchor.col === before.col && anchor.row === before.row) return;
   }
 }
 
@@ -875,7 +986,7 @@ async function commit(moveCols: number, moveRows: number) {
   const edited = { ...pos.anchor };
   if (!(await write())) return;
   canvas.focus();
-  await select(step(moveCols, moveRows));
+  await move(moveCols, moveRows);
   await fitRow(edited);
 }
 
@@ -900,8 +1011,8 @@ async function format(property: StyleProperty, value: string) {
  */
 async function fitRow(cell: Cell) {
   const view = cells.get(key(cell.col, cell.row));
-  const rowIndex = cell.row - pos.origin.row;
-  if (!view || view.display === "" || mergeAt(cell) || rowIndex < 0 || rowIndex >= rowHeights.length) return;
+  const rowIndex = rowBand(cell.row);
+  if (!view || view.display === "" || mergeAt(cell) || !rowOnScreen(cell.row) || rowHeights[rowIndex] === 0) return;
   const wraps = view.style?.wrap === true && view.kind === "text";
   ctx.font = cellFont(view);
   const width = xOf(cell.col + 1) - xOf(cell.col) - 2 * PADDING;
@@ -1033,6 +1144,246 @@ async function clearSelection() {
     statusEl.textContent = `Erro ao apagar: ${error}`;
   }
   await refresh();
+}
+
+/** Refaz a busca do "Localizar" e redesenha as marcas. */
+async function runFind() {
+  const query = findBar.hidden ? "" : findQuery.value;
+  try {
+    found = query === "" ? [] : await engine.find(sheet, query);
+  } catch (error) {
+    found = [];
+    statusEl.textContent = `Erro ao localizar: ${error}`;
+  }
+  foundKeys = new Set(found.map((cell) => key(cell.col, cell.row)));
+  syncFindCount();
+  draw();
+}
+
+/** Mostra qual das células encontradas é a ativa, e quantas são. */
+function syncFindCount() {
+  const current = found.findIndex((cell) => cell.col === pos.anchor.col && cell.row === pos.anchor.row);
+  if (findQuery.value === "") findCount.textContent = "";
+  else if (found.length === 0) findCount.textContent = "Nada encontrado";
+  else findCount.textContent = current < 0 ? `${found.length} encontradas` : `${current + 1} de ${found.length}`;
+}
+
+/** A célula vem antes de outra na ordem de leitura. */
+const comesBefore = (a: Cell, b: Cell) => a.row < b.row || (a.row === b.row && a.col < b.col);
+
+/**
+ * Vai para a célula encontrada seguinte (ou anterior) à ativa, dando a volta
+ * no fim. Com `stay`, a própria célula ativa serve, se for uma das encontradas.
+ */
+async function findStep(forward: boolean, stay = false) {
+  if (found.length === 0) return;
+  const { anchor } = pos;
+  let target: Cell | undefined;
+  if (stay) target = found.find((cell) => cell.col === anchor.col && cell.row === anchor.row);
+  if (!target && forward) target = found.find((cell) => comesBefore(anchor, cell)) ?? found[0];
+  if (!target && !forward) target = [...found].reverse().find((cell) => comesBefore(cell, anchor)) ?? found[found.length - 1];
+  if (!target) return;
+  await select(target);
+  syncFindCount();
+}
+
+function openFind() {
+  findBar.hidden = false;
+  findQuery.focus();
+  findQuery.select();
+  void runFind();
+}
+
+function closeFind() {
+  findBar.hidden = true;
+  found = [];
+  foundKeys = new Set();
+  canvas.focus();
+  draw();
+}
+
+/** Troca o texto procurado na célula ativa, se ela for uma das encontradas, e segue para a próxima. */
+async function replaceCurrent() {
+  if (!(await write())) return;
+  const { anchor } = pos;
+  if (!foundKeys.has(key(anchor.col, anchor.row))) {
+    await findStep(true, true);
+    return;
+  }
+  let status = "Substituído";
+  try {
+    const replaced = await engine.replace(sheet, anchor.col, anchor.row, findQuery.value, replaceText.value);
+    if (replaced) {
+      copiedMark = null;
+      modified = true;
+      syncDocument();
+    } else {
+      status = "O texto está no resultado da fórmula, não no que foi digitado";
+    }
+  } catch (error) {
+    status = `Erro ao substituir: ${error}`;
+  }
+  await refresh();
+  await runFind();
+  await findStep(true);
+  statusEl.textContent = status;
+}
+
+async function replaceEverything() {
+  if (!(await write())) return;
+  let status: string;
+  try {
+    const changed = await engine.replaceAll(sheet, findQuery.value, replaceText.value);
+    if (changed > 0) {
+      copiedMark = null;
+      modified = true;
+      syncDocument();
+    }
+    status = changed === 1 ? "1 célula alterada" : `${changed} células alteradas`;
+  } catch (error) {
+    status = `Erro ao substituir: ${error}`;
+  }
+  await refresh();
+  await runFind();
+  statusEl.textContent = status;
+}
+
+/** Congela as linhas acima e as colunas à esquerda da seleção. */
+async function freezeAtSelection() {
+  if (!(await write())) return;
+  const range = selectedRange();
+  // Uma coluna inteira selecionada congela só colunas; uma linha inteira, só linhas.
+  const cols = range.cols === MAX_COLS ? 0 : range.col;
+  const rows = range.rows === MAX_ROWS ? 0 : range.row;
+  if (cols === 0 && rows === 0) {
+    statusEl.textContent = "Selecione a célula abaixo e à direita do que deve ficar fixo";
+    return;
+  }
+  try {
+    await engine.setFrozen(sheet, cols, rows);
+    pos.origin = { col: cols, row: rows };
+    await refresh();
+    // Sem espaço para a parte que rola, a planilha ficaria presa.
+    const room = (bounds: number[], count: number, size: number) => size - bounds[Math.min(count, bounds.length - 1)];
+    if (room(colX, cols, wrap.clientWidth) < 60 || room(rowY, rows, wrap.clientHeight) < 30) {
+      await engine.undo();
+      statusEl.textContent = "Não cabe congelar tanto nesta janela";
+    } else {
+      statusEl.textContent = "Painéis congelados";
+      markModified();
+    }
+  } catch (error) {
+    statusEl.textContent = `Erro ao congelar: ${error}`;
+  }
+  canvas.focus();
+  await refresh();
+}
+
+/** Oculta ou reexibe as linhas ou colunas da seleção. */
+async function setHidden(axis: "rows" | "cols", hidden: boolean) {
+  const range = selectedRange();
+  const [first, count] = axis === "rows" ? [range.row, range.rows] : [range.col, range.cols];
+  await change(hidden ? "ocultar" : "reexibir", () => engine.setHidden(sheet, axis, first, count, hidden));
+  const { anchor } = pos;
+  const gone = axis === "cols" ? colWidths[colBand(anchor.col)] === 0 : rowHeights[rowBand(anchor.row)] === 0;
+  // A célula ativa ficou oculta: passa para a seguinte à mostra.
+  if (hidden && gone) {
+    pos.focus = { ...anchor };
+    await move(axis === "cols" ? 1 : 0, axis === "rows" ? 1 : 0);
+  }
+}
+
+/** Classifica pela coluna da célula ativa: a seleção, ou a tabela em volta dela. */
+async function sortSelection(descending: boolean) {
+  if (!(await write())) return;
+  const { anchor } = pos;
+  let range = selectedRange();
+  // Com a coluna inteira selecionada, vale a tabela que começa no topo dela.
+  if (range.rows === MAX_ROWS || range.cols === MAX_COLS) range = { col: anchor.col, row: anchor.row, cols: 1, rows: 1 };
+  let status: string;
+  try {
+    const sorted = await engine.sort(sheet, range, anchor.col, descending);
+    const last = { col: sorted.col + sorted.cols - 1, row: sorted.row + sorted.rows - 1 };
+    copiedMark = null;
+    markModified();
+    status = `Classificado: ${cellName(sorted)}:${cellName(last)}`;
+  } catch (error) {
+    status = `Erro ao classificar: ${error}`;
+  }
+  canvas.focus();
+  await refresh();
+  statusEl.textContent = status;
+}
+
+/** Abre o painel com os valores da coluna da célula ativa, para escolher quais mostrar. */
+async function openFilter(left: number, top: number) {
+  if (!(await write())) return;
+  try {
+    filtering = await engine.filterOptions(sheet, pos.anchor.col, pos.anchor.row);
+  } catch (error) {
+    statusEl.textContent = `Erro ao filtrar: ${error}`;
+    return;
+  }
+  filterTitle.textContent = `Filtrar a coluna ${colName(filtering.col)}`;
+  filterValues.replaceChildren(
+    ...filtering.values.map((value) => {
+      const label = document.createElement("label");
+      const box = document.createElement("input");
+      box.type = "checkbox";
+      box.checked = value.shown;
+      box.value = value.text;
+      label.append(box, value.text === "" ? "(Vazias)" : value.text);
+      return label;
+    }),
+  );
+  filterPanel.hidden = false;
+  filterPanel.style.left = `${Math.max(0, Math.min(left, window.innerWidth - filterPanel.offsetWidth - 8))}px`;
+  filterPanel.style.top = `${Math.max(0, Math.min(top, window.innerHeight - filterPanel.offsetHeight - 8))}px`;
+  filterValues.querySelector<HTMLInputElement>("input")?.focus();
+}
+
+function closeFilter() {
+  filterPanel.hidden = true;
+  filtering = null;
+  canvas.focus();
+}
+
+/** Mostra só as linhas com os valores marcados no painel. */
+async function applyFilter() {
+  const options = filtering;
+  if (!options) return;
+  const boxes = [...filterValues.querySelectorAll<HTMLInputElement>("input")];
+  const allowed = boxes.filter((box) => box.checked).map((box) => box.value);
+  closeFilter();
+  let status: string;
+  try {
+    const hidden = await engine.applyFilter(sheet, options.range, options.col, allowed);
+    copiedMark = null;
+    markModified();
+    status = hidden === 0 ? "Filtro: todas as linhas à mostra" : `Filtro: ${hidden} ${hidden === 1 ? "linha oculta" : "linhas ocultas"}`;
+  } catch (error) {
+    status = `Erro ao filtrar: ${error}`;
+  }
+  await refresh();
+  // A célula ativa pode ter ficado oculta.
+  if (rowOnScreen(pos.anchor.row) && rowHeights[rowBand(pos.anchor.row)] === 0) await move(0, 1);
+  statusEl.textContent = status;
+}
+
+/** Reexibe todas as linhas da tabela em volta da célula ativa. */
+async function clearFilter() {
+  if (!(await write())) return;
+  let status = "Filtro: todas as linhas à mostra";
+  try {
+    const { range } = await engine.filterOptions(sheet, pos.anchor.col, pos.anchor.row);
+    await engine.setHidden(sheet, "rows", range.row, range.rows, false);
+    markModified();
+  } catch (error) {
+    status = `Erro ao limpar o filtro: ${error}`;
+  }
+  canvas.focus();
+  await refresh();
+  statusEl.textContent = status;
 }
 
 /** Desfaz ou refaz a última edição e redesenha. */
@@ -1237,8 +1588,8 @@ function pointerAt(event: MouseEvent) {
 /** Grava no motor o tamanho de uma coluna ou linha da tela. */
 async function resize(grip: Grip, size: number) {
   try {
-    if (grip.kind === "col") await engine.setColWidth(sheet, pos.origin.col + grip.index, size);
-    else await engine.setRowHeight(sheet, pos.origin.row + grip.index, size);
+    if (grip.kind === "col") await engine.setColWidth(sheet, bandCol(grip.index), size);
+    else await engine.setRowHeight(sheet, bandRow(grip.index), size);
     statusEl.textContent = "Pronto";
     markModified();
   } catch (error) {
@@ -1323,8 +1674,8 @@ function autoScroll() {
   scrollTimer = window.setInterval(() => {
     const step = edgeDirection();
     const { origin } = pos;
-    const col = clamp(origin.col + step.dx, MAX_COLS - 1);
-    const row = clamp(origin.row + step.dy, MAX_ROWS - 1);
+    const col = Math.max(frozen.cols, clamp(origin.col + step.dx, MAX_COLS - 1));
+    const row = Math.max(frozen.rows, clamp(origin.row + step.dy, MAX_ROWS - 1));
     if (scrolling || (col === origin.col && row === origin.row)) return;
     scrolling = true;
     origin.col = col;
@@ -1459,7 +1810,7 @@ canvas.addEventListener("dblclick", (event) => {
     return;
   }
   if (grip?.kind !== "col") return;
-  const col = pos.origin.col + grip.index;
+  const col = bandCol(grip.index);
   let widest = 0;
   for (const cell of cells.values()) {
     if (cell.col !== col || cell.display === "") continue;
@@ -1477,10 +1828,20 @@ canvas.addEventListener(
     const delta = horizontal ? event.deltaX || event.deltaY : event.deltaY;
     if (delta === 0) return;
     const { origin } = pos;
+    const dir = Math.sign(delta);
     if (horizontal) {
-      origin.col = clamp(origin.col + Math.sign(delta), MAX_COLS - 1);
+      let col = origin.col + dir;
+      // Uma coluna oculta não ocupa espaço: rolar até ela não mudaria nada.
+      while (col > frozen.cols && colOnScreen(col) && colWidths[colBand(col)] === 0) col += dir;
+      origin.col = Math.max(frozen.cols, clamp(col, MAX_COLS - 1));
     } else {
-      origin.row = clamp(origin.row + Math.sign(delta) * 3, MAX_ROWS - 1);
+      // Três linhas visíveis por vez.
+      let row = origin.row;
+      for (let steps = 0; steps < 3; steps++) {
+        row += dir;
+        while (row > frozen.rows && rowOnScreen(row) && rowHeights[rowBand(row)] === 0) row += dir;
+      }
+      origin.row = Math.max(frozen.rows, clamp(row, MAX_ROWS - 1));
     }
     void refresh();
   },
@@ -1494,7 +1855,7 @@ canvas.addEventListener("keydown", (event) => {
     ArrowUp: [0, -1],
     ArrowDown: [0, 1],
   };
-  const move = moves[event.key];
+  const arrow = moves[event.key];
   const shortcut = event.ctrlKey || event.metaKey;
   const letter = event.key.toLowerCase();
   const toggles: Record<string, "bold" | "italic" | "underline"> = { b: "bold", i: "italic", u: "underline" };
@@ -1522,17 +1883,17 @@ canvas.addEventListener("keydown", (event) => {
   } else if (shortcut && toggles[letter] && engine.formatting) {
     event.preventDefault();
     void toggle(toggles[letter]);
-  } else if (move) {
+  } else if (arrow) {
     event.preventDefault();
     // Com Shift a seleção cresce a partir do foco; sem ele, anda a célula ativa.
-    const target = event.shiftKey ? { col: pos.focus.col + move[0], row: pos.focus.row + move[1] } : step(move[0], move[1]);
-    void select(target, event.shiftKey);
+    if (event.shiftKey) void select({ col: pos.focus.col + arrow[0], row: pos.focus.row + arrow[1] }, true);
+    else void move(arrow[0], arrow[1]);
   } else if (event.key === "Tab") {
     event.preventDefault();
-    void select(step(event.shiftKey ? -1 : 1, 0));
+    void move(event.shiftKey ? -1 : 1, 0);
   } else if (event.key === "Enter") {
     event.preventDefault();
-    void select(step(0, event.shiftKey ? -1 : 1));
+    void move(0, event.shiftKey ? -1 : 1);
   } else if (event.key === "F2") {
     event.preventDefault();
     startEdit(null, "edit");
@@ -1561,7 +1922,7 @@ editor.addEventListener("keydown", (event) => {
     ArrowUp: [0, -1],
     ArrowDown: [0, 1],
   };
-  const move = moves[event.key];
+  const arrow = moves[event.key];
   if (suggestionKey(event)) return;
   if (event.key === "Enter") {
     event.preventDefault();
@@ -1572,11 +1933,11 @@ editor.addEventListener("keydown", (event) => {
   } else if (event.key === "Escape") {
     event.preventDefault();
     cancelEdit();
-  } else if (move && editMode === "enter" && !editor.value.startsWith("=")) {
+  } else if (arrow && editMode === "enter" && !editor.value.startsWith("=")) {
     // Quem começou digitando um valor grava e anda com as setas, como no
     // Excel. Em fórmulas as setas só movem o cursor.
     event.preventDefault();
-    void commit(move[0], move[1]);
+    void commit(arrow[0], arrow[1]);
   } else {
     pointing = null;
   }
@@ -1626,7 +1987,46 @@ window.addEventListener("keydown", (event) => {
   } else if (letter === "s") {
     event.preventDefault();
     void saveFile(event.shiftKey);
+  } else if (letter === "f" || letter === "h") {
+    event.preventDefault();
+    void write().then((written) => {
+      if (!written) return;
+      openFind();
+      if (letter === "h") replaceText.focus();
+    });
   }
+});
+
+findQuery.addEventListener("input", () => void runFind().then(() => findStep(true, true)));
+for (const input of [findQuery, replaceText]) {
+  input.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      void findStep(!event.shiftKey);
+    } else if (event.key === "Escape") {
+      event.preventDefault();
+      closeFind();
+    }
+  });
+}
+$("#find-btn").addEventListener("click", () => void write().then((written) => written && openFind()));
+$("#find-next").addEventListener("click", () => void findStep(true));
+$("#find-prev").addEventListener("click", () => void findStep(false));
+$("#find-close").addEventListener("click", closeFind);
+$("#replace-one").addEventListener("click", () => void replaceCurrent());
+$("#replace-all").addEventListener("click", () => void replaceEverything());
+
+$("#filter-all").addEventListener("click", () => {
+  const boxes = [...filterValues.querySelectorAll<HTMLInputElement>("input")];
+  // Com tudo marcado, o botão desmarca tudo.
+  const check = boxes.some((box) => !box.checked);
+  for (const box of boxes) box.checked = check;
+});
+$("#filter-apply").addEventListener("click", () => void applyFilter());
+$("#filter-cancel").addEventListener("click", closeFilter);
+filterPanel.addEventListener("keydown", (event) => {
+  if (event.key === "Escape") closeFilter();
+  else if (event.key === "Enter") void applyFilter();
 });
 
 for (const button of document.querySelectorAll<HTMLElement>("[data-toggle]")) {
@@ -1685,17 +2085,29 @@ canvas.addEventListener("contextmenu", (event) => {
     } else if (!contains(range, cell.col, cell.row)) {
       await select(cell);
     }
+    // Num cabeçalho só aparecem as ações daquele eixo.
+    for (const item of menu.querySelectorAll<HTMLElement>("[data-scope]")) {
+      const scope = item.dataset.scope;
+      item.hidden = (header === "col" && scope === "row") || (header === "row" && scope !== "row");
+    }
+    for (const item of menu.querySelectorAll<HTMLElement>("[data-tables]")) {
+      if (!engine.tables) item.hidden = true;
+    }
+    menuAt = { left: event.clientX, top: event.clientY };
     menu.hidden = false;
     menu.style.left = `${Math.max(0, Math.min(event.clientX, window.innerWidth - menu.offsetWidth - 8))}px`;
     menu.style.top = `${Math.max(0, Math.min(event.clientY, window.innerHeight - menu.offsetHeight - 8))}px`;
   })();
 });
 
+/** Onde o menu abriu, para o painel de filtro abrir no mesmo lugar. */
+let menuAt = { left: 0, top: 0 };
 const closeMenu = () => {
   menu.hidden = true;
 };
 document.addEventListener("pointerdown", (event) => {
   if (!menu.hidden && !menu.contains(event.target as Node)) closeMenu();
+  if (!filterPanel.hidden && !filterPanel.contains(event.target as Node)) closeFilter();
 });
 window.addEventListener("blur", closeMenu);
 window.addEventListener("keydown", (event) => {
@@ -1709,6 +2121,13 @@ menu.addEventListener("click", (event) => {
   canvas.focus();
   if (action === "cut" || action === "copy") void copySelection(action === "cut");
   else if (action === "paste") void pasteAtSelection();
+  else if (action === "sort-asc" || action === "sort-desc") void sortSelection(action === "sort-desc");
+  else if (action === "filter") void openFilter(menuAt.left, menuAt.top);
+  else if (action === "clear-filter") void clearFilter();
+  else if (action === "hide-rows" || action === "show-rows") void setHidden("rows", action === "hide-rows");
+  else if (action === "hide-cols" || action === "show-cols") void setHidden("cols", action === "hide-cols");
+  else if (action === "freeze") void freezeAtSelection();
+  else if (action === "unfreeze") void change("descongelar", () => engine.setFrozen(sheet, 0, 0));
   else void changeStructure(action);
 });
 
