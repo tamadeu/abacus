@@ -1,4 +1,4 @@
-//! Ponte entre o Ábaco e o motor de planilhas [IronCalc](https://www.ironcalc.com).
+//! Ponte entre o Abacus e o motor de planilhas [IronCalc](https://www.ironcalc.com).
 //!
 //! A interface usa planilhas, colunas e linhas contadas a partir de zero; o
 //! IronCalc conta linhas e colunas a partir de um. A conversão acontece só
@@ -216,7 +216,7 @@ pub struct SheetInfo {
     pub name: String,
 }
 
-/// O que foi copiado ou recortado por último dentro do Ábaco.
+/// O que foi copiado ou recortado por último dentro do Abacus.
 struct Copied {
     sheet: u32,
     /// Intervalo de origem, no formato do IronCalc: linhas e colunas a
@@ -495,7 +495,7 @@ impl Engine {
     /// `None` se não havia o que colar.
     ///
     /// `text` é o texto que está na área de transferência do sistema. Se for
-    /// o mesmo que o Ábaco copiou por último, a colagem leva fórmulas e
+    /// o mesmo que o Abacus copiou por último, a colagem leva fórmulas e
     /// estilos; se vier de outro programa, entra como texto separado por
     /// tabulações.
     pub fn paste(&mut self, sheet: u32, col: u32, row: u32, text: &str) -> Result<Option<Range>, String> {
@@ -1190,7 +1190,7 @@ mod tests {
     #[test]
     fn pastes_text_from_other_programs() {
         let mut e = engine(&[(0, 0, "antigo")]);
-        // Texto que não saiu do Ábaco, com quebras de linha do Windows.
+        // Texto que não saiu do Abacus, com quebras de linha do Windows.
         let pasted = e.paste(0, 1, 1, "Nome\tValor\r\nAna\t1.234,56\r\nBia\t=2+3\r\n").unwrap();
         assert_eq!(pasted, Some(range(1, 1, 2, 3)));
         assert_eq!(shown(&e, 1, 1), "Nome");
@@ -1202,7 +1202,7 @@ mod tests {
         assert_eq!(e.paste(0, 0, 0, "  ").unwrap(), None);
         assert_eq!(shown(&e, 0, 0), "antigo");
 
-        // O Ábaco copiou algo, mas depois o usuário copiou outra coisa em
+        // O Abacus copiou algo, mas depois o usuário copiou outra coisa em
         // outro programa: vale o texto de fora.
         e.copy(0, range(0, 0, 1, 1), false).unwrap();
         e.paste(0, 5, 5, "de fora").unwrap();

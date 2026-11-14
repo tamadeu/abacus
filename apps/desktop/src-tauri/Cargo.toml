@@ -1,6 +1,6 @@
 [package]
 name = "abacus-desktop"
-description = "Ábaco para desktop"
+description = "Abacus para desktop"
 version.workspace = true
 edition.workspace = true
 repository.workspace = true

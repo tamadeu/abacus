@@ -1,15 +1,15 @@
-# Ábaco
+# Abacus
 
 Suíte de escritório de código aberto, começando pela planilha. O aplicativo
 desktop usa [Tauri](https://tauri.app) e o motor de cálculo é o
 [IronCalc](https://www.ironcalc.com), ambos em Rust.
 
-O Ábaco usa um [fork do IronCalc](https://github.com/tamadeu/IronCalc/tree/portugues-brasil)
+O Abacus usa um [fork do IronCalc](https://github.com/tamadeu/IronCalc/tree/portugues-brasil)
 que acrescenta o português do Brasil: nomes de função (`SOMA`, `SE`,
 `PROCV`), erros (`#NOME?`), números e datas no formato brasileiro e `R$`
 como moeda.
 
-![Ábaco com um orçamento aberto de um arquivo .xlsx: título mesclado, tabela com bordas, texto quebrado em linhas e valores em reais](docs/screenshot.png)
+![Abacus com um orçamento aberto de um arquivo .xlsx: título mesclado, tabela com bordas, texto quebrado em linhas e valores em reais](docs/screenshot.png)
 
 ## Estado atual
 
@@ -42,7 +42,7 @@ Projeto no início. O que já funciona:
   funções que começam com o que foi digitado (Tab aceita).
 - Alça de preenchimento no canto da seleção: arrastar continua sequências
   (1, 2, 3…) e copia fórmulas ajustando as referências.
-- Copiar, recortar e colar (Ctrl+C, Ctrl+X, Ctrl+V). Dentro do Ábaco a
+- Copiar, recortar e colar (Ctrl+C, Ctrl+X, Ctrl+V). Dentro do Abacus a
   colagem leva fórmulas, com as referências ajustadas, e estilos; a área de
   transferência do sistema recebe e aceita texto separado por tabulações,
   para trocar dados com outros programas.
@@ -115,5 +115,5 @@ cargo test
 
 ## Licença
 
-[MIT](LICENSE). O IronCalc e o Tauri, de que o Ábaco depende, são
+[MIT](LICENSE). O IronCalc e o Tauri, de que o Abacus depende, são
 distribuídos sob MIT ou Apache-2.0.

@@ -1,4 +1,4 @@
-//! Casca desktop do Ábaco: guarda a pasta de trabalho aberta e expõe o
+//! Casca desktop do Abacus: guarda a pasta de trabalho aberta e expõe o
 //! motor de planilhas para a interface por meio de comandos do Tauri.
 
 mod engine;
@@ -26,7 +26,7 @@ impl AppState {
 fn xlsx_path(path: String) -> Result<PathBuf, String> {
     let path = PathBuf::from(path);
     let is_xlsx = path.extension().is_some_and(|ext| ext.eq_ignore_ascii_case("xlsx"));
-    if is_xlsx { Ok(path) } else { Err("o Ábaco só abre e salva arquivos .xlsx".into()) }
+    if is_xlsx { Ok(path) } else { Err("o Abacus só abre e salva arquivos .xlsx".into()) }
 }
 
 /// Grava o conteúdo de uma célula. Texto vazio apaga a célula.
@@ -221,5 +221,5 @@ pub fn run() {
             save_file
         ])
         .run(tauri::generate_context!())
-        .expect("erro ao iniciar o Ábaco");
+        .expect("erro ao iniciar o Abacus");
 }

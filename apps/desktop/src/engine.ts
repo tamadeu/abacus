@@ -187,7 +187,7 @@ class TauriEngine implements Engine {
   };
 
   confirm(message: string, okLabel: string): Promise<boolean> {
-    return ask(message, { title: "Ábaco", kind: "warning", okLabel, cancelLabel: "Cancelar" });
+    return ask(message, { title: "Abacus", kind: "warning", okLabel, cancelLabel: "Cancelar" });
   }
 
   renameSheet(sheet: number, name: string): Promise<void> {
