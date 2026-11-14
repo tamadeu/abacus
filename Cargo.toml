@@ -6,6 +6,7 @@ members = ["apps/desktop/src-tauri"]
 version = "0.1.0"
 edition = "2024"
 repository = "https://github.com/tamadeu/abacus"
+license = "MIT"
 
 # Perfil de release recomendado pelo Tauri: https://tauri.app/concept/size/
 [profile.release]

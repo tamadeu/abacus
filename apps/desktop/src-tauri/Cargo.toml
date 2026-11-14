@@ -4,6 +4,7 @@ description = "Ábaco para desktop"
 version.workspace = true
 edition.workspace = true
 repository.workspace = true
+license.workspace = true
 
 [lib]
 # O sufixo `_lib` evita conflito entre o nome da biblioteca e o do binário

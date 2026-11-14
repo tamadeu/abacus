@@ -93,4 +93,5 @@ cargo test
 
 ## Licença
 
-Ainda não definida.
+[MIT](LICENSE). O IronCalc e o Tauri, de que o Ábaco depende, são
+distribuídos sob MIT ou Apache-2.0.
