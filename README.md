@@ -27,6 +27,10 @@ Projeto no início. O que já funciona:
 - Larguras de coluna e alturas de linha: vêm do arquivo, mudam arrastando a
   borda do cabeçalho, e dois cliques na borda ajustam a coluna ao conteúdo.
 - Edição pela barra de fórmulas (Enter, Tab e Esc); Delete apaga a seleção.
+- Copiar, recortar e colar (Ctrl+C, Ctrl+X, Ctrl+V). Dentro do Ábaco a
+  colagem leva fórmulas, com as referências ajustadas, e estilos; a área de
+  transferência do sistema recebe e aceita texto separado por tabulações,
+  para trocar dados com outros programas.
 - Desfazer e refazer (Ctrl+Z, Ctrl+Y).
 - As fórmulas e funções do IronCalc, com os nomes do Excel em português,
   incluindo `LET`, `LAMBDA` e matrizes dinâmicas. Arquivos `.xlsx` continuam
@@ -41,8 +45,9 @@ Limitações conhecidas:
   documentação da Microsoft e não foram conferidos num Excel em português.
 - A coluna não alarga sozinha quando o número digitado não cabe; ele aparece
   como `####` até a coluna ser ajustada.
-- Não há copiar e colar, nem edição direto na célula (só pela barra de
-  fórmulas).
+- Não há edição direto na célula (só pela barra de fórmulas), nem preencher
+  arrastando a alça da seleção.
+- Colar para outros programas leva só os valores, sem formatação.
 - Células mescladas, bordas, quebra de texto, tamanho de fonte e gráficos do
   arquivo ainda não aparecem na grade.
 - A seleção não rola a tela ao arrastar o mouse para fora dela.
@@ -85,8 +90,8 @@ cargo test
 
 ## Próximos passos
 
-1. Copiar, colar e preencher arrastando.
-2. Edição direto na célula, com destaque das referências.
+1. Edição direto na célula, com destaque das referências.
+2. Preencher arrastando a alça da seleção.
 3. Células mescladas, bordas e quebra de texto.
 4. Propor o português do Brasil ao IronCalc original.
 5. Versão web com o motor em WebAssembly.

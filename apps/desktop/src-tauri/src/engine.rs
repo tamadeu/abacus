@@ -9,6 +9,7 @@ use std::io::Cursor;
 use std::path::{Path, PathBuf};
 
 use ironcalc::base::UserModel;
+use ironcalc::base::ClipboardData;
 use ironcalc::base::expressions::types::Area;
 use ironcalc::base::types::{CellType, HorizontalAlignment, Style};
 use ironcalc::export::save_xlsx_to_writer;
@@ -39,7 +40,7 @@ pub struct View {
 }
 
 /// Um retângulo de células, com coluna e linha iniciais a partir de zero.
-#[derive(Debug, Clone, Copy, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Range {
     pub col: u32,
     pub row: u32,
@@ -137,16 +138,32 @@ pub struct SheetInfo {
     pub name: String,
 }
 
+/// O que foi copiado ou recortado por último dentro do Ábaco.
+struct Copied {
+    sheet: u32,
+    /// Intervalo de origem, no formato do IronCalc: linhas e colunas a
+    /// partir de um, (primeira linha, primeira coluna, última linha, última coluna).
+    range: (i32, i32, i32, i32),
+    /// Conteúdo e estilo de cada célula.
+    data: ClipboardData,
+    /// O mesmo conteúdo como texto separado por tabulações, que é o que vai
+    /// para a área de transferência do sistema.
+    text: String,
+    /// Veio de um recortar: colar apaga a origem.
+    cut: bool,
+}
+
 /// A pasta de trabalho aberta.
 pub struct Engine {
     model: UserModel<'static>,
+    copied: Option<Copied>,
 }
 
 impl Engine {
     /// Pasta nova, com uma planilha vazia.
     pub fn new() -> Result<Self, String> {
         let model = UserModel::new_empty("Pasta1", LOCALE, TIMEZONE, LANGUAGE)?;
-        Ok(Self { model })
+        Ok(Self { model, copied: None })
     }
 
     /// Abre um arquivo `.xlsx`.
@@ -155,7 +172,7 @@ impl Engine {
         let model = load_from_xlsx(file_name, LOCALE, TIMEZONE, LANGUAGE).map_err(|e| e.to_string())?;
         let mut model = UserModel::from_model(model);
         model.evaluate();
-        Ok(Self { model })
+        Ok(Self { model, copied: None })
     }
 
     /// Salva a pasta como `.xlsx`, substituindo o arquivo se já existir.
@@ -207,6 +224,8 @@ impl Engine {
         if visible.len() == 1 && visible[0].index == sheet {
             return Err("a pasta de trabalho precisa ter pelo menos uma planilha".into());
         }
+        // O que foi copiado guarda o índice da planilha de origem, que muda.
+        self.copied = None;
         self.model.delete_sheet(sheet)
     }
 
@@ -271,6 +290,69 @@ impl Engine {
         self.model.range_clear_contents(&area(sheet, range)?)
     }
 
+    /// Copia (ou recorta) o intervalo e devolve o conteúdo como texto separado
+    /// por tabulações, para a área de transferência do sistema. Recortar só
+    /// apaga a origem na hora de colar.
+    pub fn copy(&mut self, sheet: u32, range: Range, cut: bool) -> Result<String, String> {
+        let area = area(sheet, range)?;
+        self.select(sheet, area.row, area.column, area.row + area.height - 1, area.column + area.width - 1)?;
+        // Os campos do resultado são privados no IronCalc, mas ele pode ser
+        // serializado; é assim que as outras interfaces do projeto o leem.
+        let invalid = |e: serde_json::Error| format!("cópia inválida: {e}");
+        let mut clipboard = serde_json::to_value(self.model.copy_to_clipboard()?).map_err(invalid)?;
+        let text = clipboard["csv"].as_str().unwrap_or_default().to_string();
+        let copied = Copied {
+            sheet,
+            range: serde_json::from_value(clipboard["range"].take()).map_err(invalid)?,
+            data: serde_json::from_value(clipboard["data"].take()).map_err(invalid)?,
+            text: text.clone(),
+            cut,
+        };
+        self.copied = Some(copied);
+        Ok(text)
+    }
+
+    /// Cola a partir da célula dada e devolve o intervalo preenchido, ou
+    /// `None` se não havia o que colar.
+    ///
+    /// `text` é o texto que está na área de transferência do sistema. Se for
+    /// o mesmo que o Ábaco copiou por último, a colagem leva fórmulas e
+    /// estilos; se vier de outro programa, entra como texto separado por
+    /// tabulações.
+    pub fn paste(&mut self, sheet: u32, col: u32, row: u32, text: &str) -> Result<Option<Range>, String> {
+        let (row, col) = to_ironcalc(col, row)?;
+        self.select(sheet, row, col, row, col)?;
+        match &self.copied {
+            Some(copied) if same_text(&copied.text, text) => {
+                self.model.paste_from_clipboard(copied.sheet, copied.range, &copied.data, copied.cut)?;
+                // O que foi recortado só pode ser colado uma vez.
+                if copied.cut {
+                    self.copied = None;
+                }
+            }
+            _ if text.trim().is_empty() => return Ok(None),
+            _ => {
+                let target = Area { sheet, row, column: col, width: 1, height: 1 };
+                self.model.paste_csv_string(&target, text)?;
+            }
+        }
+        // O IronCalc deixa selecionado o intervalo que acabou de preencher.
+        let [first_row, first_col, last_row, last_col] = self.model.get_selected_view().range;
+        Ok(Some(Range {
+            col: (first_col - 1) as u32,
+            row: (first_row - 1) as u32,
+            cols: (last_col - first_col + 1) as u32,
+            rows: (last_row - first_row + 1) as u32,
+        }))
+    }
+
+    /// Seleciona um intervalo no IronCalc, que copia e cola sempre a seleção.
+    fn select(&mut self, sheet: u32, row: i32, col: i32, last_row: i32, last_col: i32) -> Result<(), String> {
+        self.model.set_selected_sheet(sheet)?;
+        self.model.set_selected_cell(row, col)?;
+        self.model.set_selected_range(row, col, last_row, last_col)
+    }
+
     /// Reduz o estilo do IronCalc ao que a grade desenha. `None` se for o padrão.
     fn cell_style(&self, style: &Style) -> Option<CellStyle> {
         let color = |color| Some(self.model.resolve_color(color)).filter(|hex| !hex.is_empty());
@@ -327,6 +409,13 @@ fn sizes(
         }
     }
     Ok(sizes)
+}
+
+/// Compara dois textos de área de transferência, ignorando o tipo de quebra
+/// de linha e os espaços nas pontas, que mudam de um programa para outro.
+fn same_text(a: &str, b: &str) -> bool {
+    let normalize = |text: &str| text.replace("\r\n", "\n").trim().to_string();
+    normalize(a) == normalize(b)
 }
 
 /// Aceita larguras e alturas entre 1 e 2000 pixels.
@@ -650,6 +739,88 @@ mod tests {
         assert_eq!(shown(&e, 0, 1), "3");
         e.undo().unwrap();
         assert_eq!(shown(&e, 0, 1), "4");
+    }
+
+    fn range(col: u32, row: u32, cols: u32, rows: u32) -> Range {
+        Range { col, row, cols, rows }
+    }
+
+    #[test]
+    fn copy_and_paste_keeps_formulas_and_styles() {
+        let mut e = engine(&[(0, 0, "10"), (1, 0, "20"), (2, 0, "=A1+B1"), (0, 1, "5"), (1, 1, "6")]);
+        set_style(&mut e, 2, 0, StyleProperty::Bold, "true");
+
+        let text = e.copy(0, range(2, 0, 1, 1), false).unwrap();
+        assert_eq!(text, "30");
+        // Colar uma linha abaixo ajusta as referências, como no Excel.
+        let pasted = e.paste(0, 2, 1, &text).unwrap();
+        assert_eq!(pasted, Some(range(2, 1, 1, 1)));
+        let copy = cell(&e, 2, 1).unwrap();
+        assert_eq!((copy.input.as_str(), copy.display.as_str()), ("=A2+B2", "11"));
+        assert!(copy.style.unwrap().bold);
+        // A origem continua lá e dá para colar de novo.
+        assert_eq!(shown(&e, 2, 0), "30");
+        assert_eq!(e.paste(0, 4, 4, &text).unwrap(), Some(range(4, 4, 1, 1)));
+
+        // Um intervalo sai como texto separado por tabulações e quebras de linha.
+        let block = e.copy(0, range(0, 0, 2, 2), false).unwrap();
+        assert_eq!(block, "10\t20\n5\t6");
+        assert_eq!(e.paste(0, 0, 5, &block).unwrap(), Some(range(0, 5, 2, 2)));
+        assert_eq!([shown(&e, 0, 5), shown(&e, 1, 5), shown(&e, 0, 6), shown(&e, 1, 6)], ["10", "20", "5", "6"]);
+
+        e.undo().unwrap();
+        assert!(cell(&e, 0, 5).is_none());
+    }
+
+    #[test]
+    fn cut_moves_the_cells_once() {
+        let mut e = engine(&[(0, 0, "10"), (1, 0, "=A1*2")]);
+        let text = e.copy(0, range(0, 0, 2, 1), true).unwrap();
+        // Recortar não mexe em nada até colar.
+        assert_eq!(shown(&e, 0, 0), "10");
+
+        assert_eq!(e.paste(0, 0, 3, &text).unwrap(), Some(range(0, 3, 2, 1)));
+        assert!(cell(&e, 0, 0).is_none());
+        assert!(cell(&e, 1, 0).is_none());
+        assert_eq!(shown(&e, 0, 3), "10");
+        assert_eq!(shown(&e, 1, 3), "20");
+
+        // Colar de novo o mesmo texto já não move: entra como texto de fora.
+        e.paste(0, 0, 6, &text).unwrap();
+        assert_eq!(shown(&e, 0, 3), "10");
+        assert_eq!(shown(&e, 0, 6), "10");
+    }
+
+    #[test]
+    fn pastes_text_from_other_programs() {
+        let mut e = engine(&[(0, 0, "antigo")]);
+        // Texto que não saiu do Ábaco, com quebras de linha do Windows.
+        let pasted = e.paste(0, 1, 1, "Nome\tValor\r\nAna\t1.234,56\r\nBia\t=2+3\r\n").unwrap();
+        assert_eq!(pasted, Some(range(1, 1, 2, 3)));
+        assert_eq!(shown(&e, 1, 1), "Nome");
+        let number = cell(&e, 2, 2).unwrap();
+        assert_eq!((number.display.as_str(), &number.kind), ("1.234,56", &CellKind::Number));
+        assert_eq!(shown(&e, 2, 3), "5");
+
+        // Área de transferência vazia: nada a colar e nada muda.
+        assert_eq!(e.paste(0, 0, 0, "  ").unwrap(), None);
+        assert_eq!(shown(&e, 0, 0), "antigo");
+
+        // O Ábaco copiou algo, mas depois o usuário copiou outra coisa em
+        // outro programa: vale o texto de fora.
+        e.copy(0, range(0, 0, 1, 1), false).unwrap();
+        e.paste(0, 5, 5, "de fora").unwrap();
+        assert_eq!(shown(&e, 5, 5), "de fora");
+    }
+
+    #[test]
+    fn copies_between_sheets() {
+        let mut e = engine(&[(0, 0, "7"), (1, 0, "=A1*3")]);
+        let second = e.add_sheet().unwrap();
+        let text = e.copy(0, range(0, 0, 2, 1), false).unwrap();
+        assert_eq!(e.paste(second, 0, 0, &text).unwrap(), Some(range(0, 0, 2, 1)));
+        let formula = cell_in(&e, second, 1, 0).unwrap();
+        assert_eq!((formula.input.as_str(), formula.display.as_str()), ("=A1*3", "21"));
     }
 
     #[test]

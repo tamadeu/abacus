@@ -89,6 +89,8 @@ interface Grip {
 let resizing: Grip | null = null;
 /** O mouse já se moveu desde que a borda foi pega. */
 let resized = false;
+/** Intervalo copiado ou recortado, que fica marcado com borda tracejada. */
+let copiedMark: { sheet: number; range: Range; cut: boolean } | null = null;
 /** Arquivo aberto, ou `null` para uma pasta nova. */
 let filePath: string | null = null;
 /** A pasta tem alterações que não estão no arquivo. */
@@ -269,6 +271,20 @@ function draw() {
     ctx.strokeRect(selLeft + 0.5, selTop + 0.5, selWidth, selHeight);
   }
 
+  // Borda tracejada no intervalo copiado ou recortado
+  if (copiedMark?.sheet === sheet) {
+    const mark = copiedMark.range;
+    const markWidth = xOf(mark.col + mark.cols) - xOf(mark.col);
+    const markHeight = yOf(mark.row + mark.rows) - yOf(mark.row);
+    if (markWidth > 0 && markHeight > 0) {
+      ctx.strokeStyle = COLORS.accent;
+      ctx.lineWidth = 2;
+      ctx.setLineDash([5, 4]);
+      ctx.strokeRect(xOf(mark.col) + 0.5, yOf(mark.row) + 0.5, markWidth, markHeight);
+      ctx.setLineDash([]);
+    }
+  }
+
   // Cabeçalhos, por cima das células
   ctx.fillStyle = COLORS.header;
   ctx.fillRect(0, 0, width, HEADER_HEIGHT);
@@ -384,6 +400,7 @@ async function write(): Promise<boolean> {
   try {
     await engine.setCell(sheet, anchor.col, anchor.row, fx.value);
     dirty = false;
+    copiedMark = null;
     statusEl.textContent = "Pronto";
     markModified();
     return true;
@@ -420,11 +437,47 @@ function toggle(property: "bold" | "italic" | "underline" | "strike") {
   return format(property, String(!current));
 }
 
+/** Copia ou recorta a seleção para a área de transferência. */
+async function copySelection(cut: boolean) {
+  if (!(await write())) return;
+  const range = selectedRange();
+  try {
+    await engine.copy(sheet, range, cut);
+    copiedMark = { sheet, range, cut };
+    statusEl.textContent = cut ? "Recortado: cole no destino" : "Copiado";
+  } catch (error) {
+    statusEl.textContent = `Erro ao copiar: ${error}`;
+  }
+  draw();
+}
+
+/** Cola a área de transferência a partir da célula ativa e seleciona o que entrou. */
+async function pasteAtSelection() {
+  if (!(await write())) return;
+  try {
+    const pasted = await engine.paste(sheet, pos.anchor.col, pos.anchor.row);
+    if (pasted === null) {
+      statusEl.textContent = "Não há nada para colar";
+      return;
+    }
+    // O que foi recortado só cola uma vez.
+    if (copiedMark?.cut) copiedMark = null;
+    pos.anchor = { col: pasted.col, row: pasted.row };
+    pos.focus = { col: pasted.col + pasted.cols - 1, row: pasted.row + pasted.rows - 1 };
+    statusEl.textContent = "Pronto";
+    markModified();
+  } catch (error) {
+    statusEl.textContent = `Erro ao colar: ${error}`;
+  }
+  await refresh();
+}
+
 /** Apaga o conteúdo da seleção. */
 async function clearSelection() {
   dirty = false;
   try {
     await engine.clearCells(sheet, selectedRange());
+    copiedMark = null;
     markModified();
   } catch (error) {
     statusEl.textContent = `Erro ao apagar: ${error}`;
@@ -536,6 +589,7 @@ async function deleteSheet(info: SheetInfo) {
     return;
   }
   // Os índices das planilhas seguintes mudaram, então as posições guardadas não valem mais.
+  copiedMark = null;
   positions = new Map();
   pos = newPosition();
   await loadSheets();
@@ -593,6 +647,7 @@ async function openFile() {
     if (path === null) return;
     filePath = path;
     modified = false;
+    copiedMark = null;
     positions = new Map();
     sheet = 0;
     pos = newPosition();
@@ -753,6 +808,17 @@ canvas.addEventListener("keydown", (event) => {
   } else if (shortcut && letter === "y") {
     event.preventDefault();
     void history("redo");
+  } else if (shortcut && (letter === "c" || letter === "x")) {
+    event.preventDefault();
+    void copySelection(letter === "x");
+  } else if (shortcut && letter === "v") {
+    event.preventDefault();
+    void pasteAtSelection();
+  } else if (event.key === "Escape") {
+    // Desiste do copiar ou recortar em andamento (só a marca; o conteúdo
+    // continua na área de transferência).
+    copiedMark = null;
+    draw();
   } else if (shortcut && letter === "a") {
     // Sem isto o navegador selecionaria o texto da página inteira.
     event.preventDefault();

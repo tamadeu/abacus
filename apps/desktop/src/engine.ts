@@ -100,6 +100,10 @@ export interface Engine {
   format(sheet: number, range: Range, property: StyleProperty, value: string): Promise<void>;
   /** Apaga o conteúdo das células do intervalo, mantendo o estilo. */
   clearCells(sheet: number, range: Range): Promise<void>;
+  /** Copia o intervalo para a área de transferência. Com `cut`, colar apaga a origem. */
+  copy(sheet: number, range: Range, cut: boolean): Promise<void>;
+  /** Cola a partir da célula dada. Devolve o intervalo preenchido, ou `null` se não havia o que colar. */
+  paste(sheet: number, col: number, row: number): Promise<Range | null>;
   undo(): Promise<void>;
   redo(): Promise<void>;
 }
@@ -171,6 +175,14 @@ class TauriEngine implements Engine {
     return invoke("clear_cells", { sheet, range });
   }
 
+  copy(sheet: number, range: Range, cut: boolean): Promise<void> {
+    return invoke("copy_cells", { sheet, range, cut });
+  }
+
+  paste(sheet: number, col: number, row: number): Promise<Range | null> {
+    return invoke("paste_cells", { sheet, col, row });
+  }
+
   undo(): Promise<void> {
     return invoke("undo");
   }
@@ -184,6 +196,7 @@ class TauriEngine implements Engine {
  * Substituto usado quando a interface roda no navegador (`npm run dev`),
  * fora do Tauri. Guarda o que foi digitado, mas não calcula fórmulas, não
  * formata, não redimensiona, não desfaz edições e não abre nem salva arquivos.
+ * Copiar e colar funcionam só dentro da própria página.
  */
 class PreviewEngine implements Engine {
   readonly notice = "Pré-visualização no navegador (sem motor de cálculo)";
@@ -191,6 +204,8 @@ class PreviewEngine implements Engine {
   readonly formatting = false;
   private names = ["Planilha1"];
   private cells = new Map<string, CellView>();
+  /** Última cópia: o texto de cada célula e, se foi um recortar, de onde saiu. */
+  private copied: { rows: string[][]; cutFrom: { sheet: number; range: Range } | null } | null = null;
 
   async sheets(): Promise<SheetInfo[]> {
     return this.names.map((name, index) => ({ index, name }));
@@ -251,6 +266,31 @@ class PreviewEngine implements Engine {
 
   async clearCells(sheet: number, range: Range): Promise<void> {
     for (const [key] of this.inRange(sheet, range)) this.cells.delete(key);
+  }
+
+  async copy(sheet: number, range: Range, cut: boolean): Promise<void> {
+    const rows: string[][] = [];
+    for (let row = range.row; row < range.row + range.rows; row++) {
+      const line: string[] = [];
+      for (let col = range.col; col < range.col + range.cols; col++) {
+        line.push(this.cells.get(`${sheet}:${col},${row}`)?.input ?? "");
+      }
+      rows.push(line);
+    }
+    this.copied = { rows, cutFrom: cut ? { sheet, range } : null };
+  }
+
+  async paste(sheet: number, col: number, row: number): Promise<Range | null> {
+    if (!this.copied) return null;
+    const { rows, cutFrom } = this.copied;
+    if (cutFrom) {
+      await this.clearCells(cutFrom.sheet, cutFrom.range);
+      this.copied = null;
+    }
+    for (const [dy, line] of rows.entries()) {
+      for (const [dx, input] of line.entries()) await this.setCell(sheet, col + dx, row + dy, input);
+    }
+    return { col, row, cols: rows[0].length, rows: rows.length };
   }
 
   private inRange(sheet: number, range: Range): [string, CellView][] {

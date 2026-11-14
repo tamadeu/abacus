@@ -7,7 +7,8 @@ use std::path::PathBuf;
 use std::sync::Mutex;
 
 use engine::{Engine, Range, SheetInfo, StyleProperty, View};
-use tauri::State;
+use tauri::{AppHandle, State};
+use tauri_plugin_clipboard_manager::ClipboardExt;
 
 /// Pasta de trabalho aberta na janela.
 struct AppState {
@@ -64,6 +65,31 @@ fn format_cells(
 #[tauri::command]
 fn clear_cells(state: State<'_, AppState>, sheet: u32, range: Range) -> Result<(), String> {
     state.with(|engine| engine.clear(sheet, range))
+}
+
+/// Copia (ou recorta) o intervalo para a área de transferência do sistema.
+#[tauri::command]
+fn copy_cells(app: AppHandle, state: State<'_, AppState>, sheet: u32, range: Range, cut: bool) -> Result<(), String> {
+    let text = state.with(|engine| engine.copy(sheet, range, cut))?;
+    app.clipboard()
+        .write_text(text)
+        .map_err(|e| format!("não foi possível gravar na área de transferência: {e}"))
+}
+
+/// Cola a área de transferência do sistema a partir da célula dada e devolve
+/// o intervalo preenchido, ou `None` se não havia o que colar.
+#[tauri::command]
+fn paste_cells(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    sheet: u32,
+    col: u32,
+    row: u32,
+) -> Result<Option<Range>, String> {
+    // A leitura falha quando a área de transferência está vazia ou guarda
+    // algo que não é texto, como uma imagem; nos dois casos não há o que colar.
+    let text = app.clipboard().read_text().unwrap_or_default();
+    state.with(|engine| engine.paste(sheet, col, row, &text))
 }
 
 #[tauri::command]
@@ -131,6 +157,7 @@ fn save_file(state: State<'_, AppState>, path: String) -> Result<(), String> {
 pub fn run() {
     let engine = Engine::new().expect("erro ao criar a pasta de trabalho");
     tauri::Builder::default()
+        .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_dialog::init())
         .manage(AppState { engine: Mutex::new(engine) })
         .invoke_handler(tauri::generate_handler![
@@ -138,6 +165,8 @@ pub fn run() {
             get_view,
             format_cells,
             clear_cells,
+            copy_cells,
+            paste_cells,
             get_sheets,
             add_sheet,
             rename_sheet,
