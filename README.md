@@ -4,6 +4,11 @@ Suíte de escritório de código aberto, começando pela planilha. O aplicativo
 desktop usa [Tauri](https://tauri.app) e o motor de cálculo é o
 [IronCalc](https://www.ironcalc.com), ambos em Rust.
 
+O Ábaco usa um [fork do IronCalc](https://github.com/tamadeu/IronCalc/tree/portugues-brasil)
+que acrescenta o português do Brasil: nomes de função (`SOMA`, `SE`,
+`PROCV`), erros (`#NOME?`), números e datas no formato brasileiro e `R$`
+como moeda.
+
 ![Ábaco com um relatório financeiro aberto de um arquivo .xlsx, um intervalo selecionado e a barra de formatação](docs/screenshot.png)
 
 ## Estado atual
@@ -23,15 +28,19 @@ Projeto no início. O que já funciona:
   borda do cabeçalho, e dois cliques na borda ajustam a coluna ao conteúdo.
 - Edição pela barra de fórmulas (Enter, Tab e Esc); Delete apaga a seleção.
 - Desfazer e refazer (Ctrl+Z, Ctrl+Y).
-- As fórmulas e funções do IronCalc, incluindo `LET`, `LAMBDA` e matrizes
-  dinâmicas.
+- As fórmulas e funções do IronCalc, com os nomes do Excel em português,
+  incluindo `LET`, `LAMBDA` e matrizes dinâmicas. Arquivos `.xlsx` continuam
+  compatíveis: no arquivo as funções ficam gravadas em inglês, como no Excel.
+- Números, datas e moeda no formato brasileiro (`18.500,00`, `14/11/2026`,
+  `R$ 10,50`).
 
 Limitações conhecidas:
 
-- O IronCalc 0.9 ainda não tem português. Os números usam a localidade
-  espanhola, que tem o mesmo formato do Brasil (`18.500,00`, `;` entre
-  argumentos), e os nomes de função ficam em inglês (`SUM`, não `SOMA`).
-  `R$` digitado numa célula ainda não é reconhecido como moeda.
+- Os nomes em português de algumas funções muito recentes do Excel
+  (`MAPA`, `REGEX.TESTAR`, `PORCENTAGEMDE`, `APARARINTERVALO`) vieram da
+  documentação da Microsoft e não foram conferidos num Excel em português.
+- A coluna não alarga sozinha quando o número digitado não cabe; ele aparece
+  como `####` até a coluna ser ajustada.
 - Não há copiar e colar, nem edição direto na célula (só pela barra de
   fórmulas).
 - Células mescladas, bordas, quebra de texto, tamanho de fonte e gráficos do
@@ -76,10 +85,10 @@ cargo test
 
 ## Próximos passos
 
-1. Localidade e nomes de função em português, no IronCalc.
-2. Copiar, colar e preencher arrastando.
-3. Edição direto na célula, com destaque das referências.
-4. Células mescladas, bordas e quebra de texto.
+1. Copiar, colar e preencher arrastando.
+2. Edição direto na célula, com destaque das referências.
+3. Células mescladas, bordas e quebra de texto.
+4. Propor o português do Brasil ao IronCalc original.
 5. Versão web com o motor em WebAssembly.
 
 ## Licença

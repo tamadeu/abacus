@@ -189,7 +189,7 @@ class PreviewEngine implements Engine {
   readonly notice = "Pré-visualização no navegador (sem motor de cálculo)";
   readonly files = null;
   readonly formatting = false;
-  private names = ["Sheet1"];
+  private names = ["Planilha1"];
   private cells = new Map<string, CellView>();
 
   async sheets(): Promise<SheetInfo[]> {
@@ -201,7 +201,7 @@ class PreviewEngine implements Engine {
   }
 
   async addSheet(): Promise<number> {
-    this.names.push(`Sheet${this.names.length + 1}`);
+    this.names.push(`Planilha${this.names.length + 1}`);
     return this.names.length - 1;
   }
 

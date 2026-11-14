@@ -15,15 +15,11 @@ use ironcalc::export::save_xlsx_to_writer;
 use ironcalc::import::load_from_xlsx;
 use serde::{Deserialize, Serialize};
 
-/// Localidade dos números e datas.
-///
-/// O IronCalc 0.9 ainda não tem português. O espanhol é o substituto mais
-/// próximo: vírgula decimal, ponto de milhar, `;` entre argumentos e datas
-/// em dia/mês/ano. Trocar para `pt-BR` quando existir.
-const LOCALE: &str = "es";
-/// Idioma dos nomes de função e dos erros (`SUM`, `#DIV/0!`). Também não há
-/// português ainda, então fica em inglês.
-const LANGUAGE: &str = "en";
+/// Localidade dos números, datas e moeda: português do Brasil. Vem do fork
+/// do IronCalc declarado no `Cargo.toml`; o IronCalc 0.9 não a tem.
+const LOCALE: &str = "pt";
+/// Idioma dos nomes de função e dos erros (`SOMA`, `#NOME?`), do mesmo fork.
+const LANGUAGE: &str = "pt";
 const TIMEZONE: &str = "America/Sao_Paulo";
 /// Limites de quantas colunas e linhas uma única tela pode pedir, para o
 /// caso de muitas delas estarem ocultas (largura ou altura zero).
@@ -407,13 +403,43 @@ mod tests {
             (1, 3, "22.400,00"),
             (2, 3, "11.800,00"),
             (3, 3, "=B4-C4"),
-            (1, 7, "=SUM(B3:B6)"),
-            (3, 7, "=SUM(D3:D6)"),
+            (1, 7, "=SOMA(B3:B6)"),
+            (3, 7, "=SOMA(D3:D6)"),
         ]);
         assert_eq!(shown(&e, 3, 2), "9.300,00");
         assert_eq!(shown(&e, 3, 3), "10.600,00");
         assert_eq!(shown(&e, 1, 7), "40.900,00");
         assert_eq!(shown(&e, 3, 7), "19.900,00");
+    }
+
+    #[test]
+    fn speaks_brazilian_portuguese() {
+        let mut e = engine(&[
+            (0, 0, "R$ 10,50"),
+            (1, 0, "=A1*2"),
+            (2, 0, "=SE(A1>10; \"caro\"; \"barato\")"),
+            (3, 0, "=MÉDIA(A1:B1)"),
+            (4, 0, "=NÃOEXISTE(1)"),
+            (5, 0, "=VERDADEIRO"),
+            (6, 0, "=SUM(A1:B1)"),
+            (7, 0, "15/03/2026"),
+        ]);
+        // Moeda digitada vira número, e a fórmula herda o formato.
+        let typed = cell(&e, 0, 0).unwrap();
+        assert_eq!((typed.display.as_str(), &typed.kind), ("R$10,50", &CellKind::Number));
+        assert_eq!(shown(&e, 1, 0), "R$21,00");
+        assert_eq!(shown(&e, 2, 0), "caro");
+        assert_eq!(shown(&e, 3, 0), "R$15,75");
+        assert_eq!(shown(&e, 4, 0), "#NOME?");
+        assert_eq!(shown(&e, 5, 0), "VERDADEIRO");
+        // O nome em inglês não vale: o idioma das fórmulas é o português.
+        assert_eq!(shown(&e, 6, 0), "#NOME?");
+        assert_eq!(cell(&e, 7, 0).unwrap().kind, CellKind::Number);
+        assert_eq!(shown(&e, 7, 0), "15/03/2026");
+
+        assert_eq!(e.sheets()[0].name, "Planilha1");
+        e.add_sheet().unwrap();
+        assert_eq!(e.sheets()[1].name, "Planilha2");
     }
 
     #[test]
@@ -467,7 +493,7 @@ mod tests {
 
     #[test]
     fn modern_excel_features() {
-        let e = engine(&[(0, 0, "=LET(x;2;x*3)"), (1, 0, "=LAMBDA(x;x+1)(2)"), (2, 0, "=SEQUENCE(3)")]);
+        let e = engine(&[(0, 0, "=LET(x;2;x*3)"), (1, 0, "=LAMBDA(x;x+1)(2)"), (2, 0, "=SEQUÊNCIA(3)")]);
         assert_eq!(shown(&e, 0, 0), "6");
         assert_eq!(shown(&e, 1, 0), "3");
         // Matriz dinâmica: o resultado transborda para as células de baixo.
