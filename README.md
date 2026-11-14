@@ -4,7 +4,7 @@ Suíte de escritório de código aberto, começando pela planilha. O aplicativo
 desktop usa [Tauri](https://tauri.app) e o motor de cálculo é o
 [IronCalc](https://www.ironcalc.com), ambos em Rust.
 
-O Abacus usa um [fork do IronCalc](https://github.com/tamadeu/IronCalc/tree/portugues-brasil)
+O Abacus usa um [fork do IronCalc](https://github.com/tamadeu/IronCalc/tree/abacus)
 que acrescenta o português do Brasil: nomes de função (`SOMA`, `SE`,
 `PROCV`), erros (`#NOME?`), números e datas no formato brasileiro e `R$`
 como moeda.
