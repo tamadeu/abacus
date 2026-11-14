@@ -13,6 +13,10 @@ export interface CellStyle {
   fill: string | null;
   /** Sem alinhamento explícito, números ficam à direita e texto à esquerda. */
   align: "left" | "center" | "right" | null;
+  /** Alinhamento vertical. Sem ele, o conteúdo fica embaixo, como no Excel. */
+  valign: "top" | "center" | null;
+  /** Tamanho da fonte em porcentagem do padrão (200 é o dobro); `null` é o padrão. */
+  size: number | null;
   /** O texto quebra em várias linhas dentro da célula. */
   wrap: boolean;
   /** Bordas da célula, na ordem: cima, direita, baixo, esquerda. */
@@ -76,9 +80,21 @@ export interface Range {
  * `underline` e `strike` recebem `"true"` ou `"false"`; `color` e `fill`,
  * uma cor `#RRGGBB` ou vazio para remover; `align`, `"left"`, `"center"`,
  * `"right"` ou `"general"`; `format`, um formato numérico do Excel; `wrap`,
- * `"true"` ou `"false"`.
+ * `"true"` ou `"false"`; `size`, a variação em pontos (`"1"` ou `"-1"`);
+ * `valign`, `"top"`, `"center"` ou `"bottom"`.
  */
-export type StyleProperty = "bold" | "italic" | "underline" | "strike" | "color" | "fill" | "align" | "format" | "wrap";
+export type StyleProperty =
+  | "bold"
+  | "italic"
+  | "underline"
+  | "strike"
+  | "color"
+  | "fill"
+  | "align"
+  | "format"
+  | "wrap"
+  | "size"
+  | "valign";
 
 /** Uma planilha visível da pasta de trabalho. */
 export interface SheetInfo {

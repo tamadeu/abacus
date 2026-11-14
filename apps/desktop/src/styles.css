@@ -63,7 +63,7 @@ body {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 6px;
+  gap: 4px;
   padding: 8px 16px 0;
 }
 
@@ -90,6 +90,31 @@ body {
   font: inherit;
   color: inherit;
   cursor: pointer;
+}
+
+/* Lista de funções sugeridas enquanto se digita uma fórmula. */
+#suggest {
+  position: fixed;
+  z-index: 10;
+  min-width: 200px;
+  margin: 0;
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+  box-shadow: 0 8px 24px rgba(27, 27, 41, 0.16);
+  list-style: none;
+}
+
+#suggest li {
+  padding: 5px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+#suggest li[aria-selected="true"] {
+  background: #e7e5fb;
+  color: #3730a3;
 }
 
 /* Menu que abre com o botão direito na grade. */
@@ -122,7 +147,7 @@ body {
 .separator {
   width: 1px;
   height: 20px;
-  margin: 0 4px;
+  margin: 0 2px;
   background: var(--line);
 }
 

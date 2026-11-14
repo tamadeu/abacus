@@ -7,6 +7,7 @@ import {
   type Structure,
   type StyleProperty,
 } from "./engine";
+import FUNCTIONS from "./functions.json";
 import { formulaRefs } from "./refs";
 
 const HEADER_WIDTH = 48;
@@ -52,6 +53,8 @@ const editor = $<HTMLInputElement>("#cell-editor");
 const menu = $("#menu");
 const mergeButton = $("#merge-btn");
 const borderSelect = $<HTMLSelectElement>("#borders");
+const valignSelect = $<HTMLSelectElement>("#valign");
+const suggest = $("#suggest");
 
 /** Estilos que a barra de ferramentas liga e desliga. */
 type ToggleProperty = "bold" | "italic" | "underline" | "strike" | "wrap";
@@ -127,6 +130,16 @@ let editMode: "enter" | "edit" | null = null;
  * ela ocupa e a célula onde o clique começou. Arrastar troca esse trecho.
  */
 let pointing: { input: HTMLInputElement; start: number; end: number; from: Cell } | null = null;
+/** Cabeçalhos sendo arrastados para selecionar colunas ou linhas inteiras. */
+let headerDrag: { kind: "col" | "row"; from: Cell } | null = null;
+/** Última posição do mouse durante um arrasto, para a rolagem automática. */
+let lastPointer = { px: 0, py: 0 };
+/** Temporizador da rolagem automática, ativo enquanto o mouse está além da borda. */
+let scrollTimer: number | null = null;
+/** Uma rolagem automática está esperando a resposta do motor. */
+let scrolling = false;
+/** Funções sugeridas para o nome que está sendo digitado, e onde ele fica no texto. */
+let suggestion: { input: HTMLInputElement; start: number; end: number; names: string[]; index: number } | null = null;
 /** O mouse está arrastando para apontar um intervalo na fórmula. */
 let pointDrag = false;
 /** Destino do preenchimento enquanto a alça é arrastada; `null` se ainda não saiu da seleção. */
@@ -263,8 +276,12 @@ function gripAt(px: number, py: number): Grip | null {
   return null;
 }
 
+/** Tamanho da fonte de uma célula em relação ao padrão: 1 é o padrão, 2 é o dobro. */
+const fontScale = (cell: CellView) => (cell.style?.size ?? 100) / 100;
+
 /** Fonte usada para desenhar o texto de uma célula. */
-const cellFont = (cell: CellView) => `${cell.style?.italic ? "italic " : ""}${cell.style?.bold ? "700 " : ""}14px ${FONT}`;
+const cellFont = (cell: CellView) =>
+  `${cell.style?.italic ? "italic " : ""}${cell.style?.bold ? "700 " : ""}${Math.round(140 * fontScale(cell)) / 10}px ${FONT}`;
 
 /** Retângulo de um intervalo na tela, limitado à área visível. */
 function rectOf(range: Range) {
@@ -423,15 +440,19 @@ function draw() {
     ctx.clip();
     ctx.fillStyle = style?.color ?? (cell.kind === "error" ? COLORS.error : COLORS.ink);
     ctx.textAlign = align;
-    // O bloco de linhas fica centrado na altura; se não couber, começa do topo.
-    const blockTop = Math.max(top + 3, top + (cellHeight - lines.length * LINE_HEIGHT) / 2);
+    // O bloco de linhas fica embaixo, como no Excel, a menos que o estilo
+    // peça outro alinhamento vertical. Se não couber, começa do topo.
+    const lineHeight = Math.round(LINE_HEIGHT * fontScale(cell));
+    const spare = cellHeight - lines.length * lineHeight;
+    const offset = style?.valign === "top" ? 3 : style?.valign === "center" ? spare / 2 : spare - 3;
+    const blockTop = top + Math.max(3, offset);
     lines.forEach((line, index) => {
-      const middle = blockTop + index * LINE_HEIGHT + LINE_HEIGHT / 2 + 1;
+      const middle = blockTop + index * lineHeight + lineHeight / 2 + 1;
       ctx.fillText(line, anchorX, middle);
       if (style?.underline || style?.strike) {
         const lineWidth = ctx.measureText(line).width;
         const start = align === "right" ? anchorX - lineWidth : align === "center" ? anchorX - lineWidth / 2 : anchorX;
-        if (style.underline) ctx.fillRect(start, middle + 8, lineWidth, 1);
+        if (style.underline) ctx.fillRect(start, middle + lineHeight * 0.44, lineWidth, 1);
         if (style.strike) ctx.fillRect(start, middle, lineWidth, 1);
       }
     });
@@ -576,6 +597,95 @@ function stopEdit() {
   editMode = null;
   pointing = null;
   editor.hidden = true;
+  closeSuggestions();
+}
+
+/** Sem acentos e em maiúsculas, para "media" encontrar "MÉDIA". */
+const plain = (text: string) => text.normalize("NFD").replace(/\p{M}/gu, "").toUpperCase();
+const FUNCTION_KEYS = FUNCTIONS.map((name) => [plain(name), name] as const);
+
+function closeSuggestions() {
+  suggestion = null;
+  suggest.hidden = true;
+}
+
+/** Mostra as funções cujo nome começa com o que está sendo digitado na fórmula. */
+function updateSuggestions(input: HTMLInputElement) {
+  const caret = input.selectionStart ?? input.value.length;
+  // O nome em digitação: letras logo depois do "=", de um operador ou de um separador.
+  const typed = input.value.startsWith("=")
+    ? /(?:^=|[=+\-*/^(;:,<>&\s])(\p{L}[\p{L}\p{N}._]*)$/u.exec(input.value.slice(0, caret))
+    : null;
+  // No meio de um nome já escrito não há o que sugerir.
+  if (!typed || /^[\p{L}\p{N}._(]/u.test(input.value.slice(caret))) {
+    closeSuggestions();
+    return;
+  }
+  const prefix = plain(typed[1]);
+  const names = FUNCTION_KEYS.filter(([key]) => key.startsWith(prefix))
+    .slice(0, 8)
+    .map(([, name]) => name);
+  if (names.length === 0) {
+    closeSuggestions();
+    return;
+  }
+  suggestion = { input, start: caret - typed[1].length, end: caret, names, index: 0 };
+  renderSuggestions();
+}
+
+function renderSuggestions() {
+  if (!suggestion) return;
+  const { input, names, index } = suggestion;
+  suggest.replaceChildren(
+    ...names.map((name, position) => {
+      const item = document.createElement("li");
+      item.setAttribute("role", "option");
+      item.setAttribute("aria-selected", String(position === index));
+      item.textContent = name;
+      // `mousedown` e não `click`, para o campo não perder o foco.
+      item.addEventListener("mousedown", (event) => {
+        event.preventDefault();
+        acceptSuggestion(position);
+      });
+      return item;
+    }),
+  );
+  const bounds = input.getBoundingClientRect();
+  suggest.hidden = false;
+  suggest.style.left = `${Math.max(0, Math.min(bounds.left, window.innerWidth - suggest.offsetWidth - 8))}px`;
+  suggest.style.top = `${bounds.bottom + 2}px`;
+}
+
+/** Troca o nome em digitação pela função escolhida, já com o parêntese aberto. */
+function acceptSuggestion(index: number) {
+  if (!suggestion) return;
+  const { input, start, end, names } = suggestion;
+  const call = `${names[index]}(`;
+  setDraft(input.value.slice(0, start) + call + input.value.slice(end));
+  input.setSelectionRange(start + call.length, start + call.length);
+  closeSuggestions();
+  draw();
+}
+
+/**
+ * Trata as teclas que agem sobre a lista de sugestões e diz se a tecla foi
+ * consumida. Como no Excel, Tab aceita a sugestão; Enter grava a célula.
+ */
+function suggestionKey(event: KeyboardEvent): boolean {
+  if (!suggestion) return false;
+  if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+    const count = suggestion.names.length;
+    suggestion.index = (suggestion.index + (event.key === "ArrowDown" ? 1 : count - 1)) % count;
+    renderSuggestions();
+  } else if (event.key === "Tab") {
+    acceptSuggestion(suggestion.index);
+  } else if (event.key === "Escape") {
+    closeSuggestions();
+  } else {
+    return false;
+  }
+  event.preventDefault();
+  return true;
 }
 
 /** Descarta a edição em andamento. */
@@ -623,6 +733,7 @@ function pointAt(input: HTMLInputElement, from: Cell, to: Cell) {
   setDraft(input.value.slice(0, start) + text + input.value.slice(end));
   pointing = { input, start, end: start + text.length, from };
   input.setSelectionRange(pointing.end, pointing.end);
+  closeSuggestions();
   draw();
 }
 
@@ -631,7 +742,10 @@ function syncFormulaBar() {
   const { anchor } = pos;
   const range = selectedRange();
   const last = { col: range.col + range.cols - 1, row: range.row + range.rows - 1 };
-  nameBox.textContent = singleSelection() ? cellName(anchor) : `${cellName(range)}:${cellName(last)}`;
+  if (range.rows === MAX_ROWS && range.cols === MAX_COLS) nameBox.textContent = "Tudo";
+  else if (range.rows === MAX_ROWS) nameBox.textContent = `${colName(range.col)}:${colName(last.col)}`;
+  else if (range.cols === MAX_COLS) nameBox.textContent = `${range.row + 1}:${last.row + 1}`;
+  else nameBox.textContent = singleSelection() ? cellName(anchor) : `${cellName(range)}:${cellName(last)}`;
   if (!dirty) fx.value = cells.get(key(anchor.col, anchor.row))?.input ?? "";
 }
 
@@ -780,16 +894,19 @@ async function format(property: StyleProperty, value: string) {
 }
 
 /**
- * Aumenta a altura da linha se o texto com quebra de uma célula não couber,
- * como o Excel faz. Nunca diminui: a altura pode ter sido escolhida à mão.
+ * Aumenta a altura da linha se o conteúdo de uma célula não couber nela (por
+ * quebrar em várias linhas ou por ter fonte grande), como o Excel faz. Nunca
+ * diminui: a altura pode ter sido escolhida à mão.
  */
 async function fitRow(cell: Cell) {
   const view = cells.get(key(cell.col, cell.row));
   const rowIndex = cell.row - pos.origin.row;
-  if (!view?.style?.wrap || view.kind !== "text" || mergeAt(cell) || rowIndex < 0 || rowIndex >= rowHeights.length) return;
+  if (!view || view.display === "" || mergeAt(cell) || rowIndex < 0 || rowIndex >= rowHeights.length) return;
+  const wraps = view.style?.wrap === true && view.kind === "text";
   ctx.font = cellFont(view);
   const width = xOf(cell.col + 1) - xOf(cell.col) - 2 * PADDING;
-  const needed = wrapLines(view.display, width).length * LINE_HEIGHT + 8;
+  const lines = wraps ? wrapLines(view.display, width).length : 1;
+  const needed = lines * Math.round(LINE_HEIGHT * fontScale(view)) + 8;
   if (needed <= rowHeights[rowIndex]) return;
   try {
     await engine.setRowHeight(sheet, cell.row, Math.min(needed, 2000));
@@ -1130,9 +1247,99 @@ async function resize(grip: Grip, size: number) {
   await refresh();
 }
 
+/** Cabeçalho sob um ponto do canvas: de coluna, de linha, o canto, ou nenhum. */
+function headerAt(px: number, py: number): "col" | "row" | "corner" | null {
+  if (px < HEADER_WIDTH && py < HEADER_HEIGHT) return "corner";
+  if (py < HEADER_HEIGHT) return "col";
+  return px < HEADER_WIDTH ? "row" : null;
+}
+
+/** Seleciona colunas ou linhas inteiras, de `from` até `to`, ou a planilha toda. */
+function selectHeaders(kind: "col" | "row" | "corner", from: Cell, to: Cell) {
+  if (kind === "corner") {
+    pos.anchor = { col: 0, row: 0 };
+    pos.focus = { col: MAX_COLS - 1, row: MAX_ROWS - 1 };
+  } else if (kind === "col") {
+    pos.anchor = { col: from.col, row: 0 };
+    pos.focus = { col: to.col, row: MAX_ROWS - 1 };
+  } else {
+    pos.anchor = { col: 0, row: from.row };
+    pos.focus = { col: MAX_COLS - 1, row: to.row };
+  }
+  draw();
+  syncFormulaBar();
+  syncToolbar();
+}
+
+/** Leva o arrasto em andamento (seleção, cabeçalhos, alça ou fórmula) até um ponto. */
+function dragTo(px: number, py: number) {
+  const cell = cellAt(px, py);
+  if (fillDrag) {
+    // Preenche no sentido em que o mouse mais se afastou da seleção.
+    const range = selectedRange();
+    const outside = (value: number, start: number, size: number) =>
+      value < start ? value - start : value >= start + size ? value - (start + size - 1) : 0;
+    const rows = outside(cell.row, range.row, range.rows);
+    const cols = outside(cell.col, range.col, range.cols);
+    if (rows === 0 && cols === 0) fillTarget = null;
+    else if (Math.abs(rows) >= Math.abs(cols)) fillTarget = { axis: "rows", to: cell.row };
+    else fillTarget = { axis: "cols", to: cell.col };
+    draw();
+  } else if (pointDrag) {
+    if (pointing) pointAt(pointing.input, pointing.from, cell);
+  } else if (headerDrag) {
+    selectHeaders(headerDrag.kind, headerDrag.from, cell);
+  } else if (dragging && (cell.col !== pos.focus.col || cell.row !== pos.focus.row)) {
+    pos.focus = cell;
+    draw();
+    syncFormulaBar();
+  }
+}
+
+/** Para onde rolar quando o mouse, num arrasto, passa da borda da grade. */
+function edgeDirection() {
+  const { px, py } = lastPointer;
+  const dx = px > wrap.clientWidth - 4 ? 1 : px < HEADER_WIDTH ? -1 : 0;
+  const dy = py > wrap.clientHeight - 4 ? 1 : py < HEADER_HEIGHT ? -1 : 0;
+  // Arrastando cabeçalhos, o mouse fica sobre eles: só o outro eixo rola.
+  if (headerDrag?.kind === "col") return { dx, dy: 0 };
+  if (headerDrag?.kind === "row") return { dx: 0, dy };
+  return { dx, dy };
+}
+
+function stopAutoScroll() {
+  if (scrollTimer !== null) window.clearInterval(scrollTimer);
+  scrollTimer = null;
+}
+
+/** Rola a grade aos poucos enquanto um arrasto mantém o mouse além da borda. */
+function autoScroll() {
+  const { dx, dy } = edgeDirection();
+  if (dx === 0 && dy === 0) {
+    stopAutoScroll();
+    return;
+  }
+  if (scrollTimer !== null) return;
+  scrollTimer = window.setInterval(() => {
+    const step = edgeDirection();
+    const { origin } = pos;
+    const col = clamp(origin.col + step.dx, MAX_COLS - 1);
+    const row = clamp(origin.row + step.dy, MAX_ROWS - 1);
+    if (scrolling || (col === origin.col && row === origin.row)) return;
+    scrolling = true;
+    origin.col = col;
+    origin.row = row;
+    void refresh().then(() => {
+      scrolling = false;
+      dragTo(lastPointer.px, lastPointer.py);
+    });
+  }, 60);
+}
+
 canvas.addEventListener("pointerdown", (event) => {
   if (event.button !== 0) return;
   const { px, py } = pointerAt(event);
+  lastPointer = { px, py };
   const grip = gripAt(px, py);
   if (grip) {
     resizing = grip;
@@ -1147,9 +1354,18 @@ canvas.addEventListener("pointerdown", (event) => {
     canvas.setPointerCapture(event.pointerId);
     return;
   }
-  if (px < HEADER_WIDTH || py < HEADER_HEIGHT) return;
   const cell = cellAt(px, py);
   canvas.setPointerCapture(event.pointerId);
+  // Clicar num cabeçalho seleciona a coluna ou a linha inteira; no canto, tudo.
+  const header = headerAt(px, py);
+  if (header) {
+    if (header !== "corner") headerDrag = { kind: header, from: cell };
+    void write().then((written) => {
+      if (written) selectHeaders(header, cell, cell);
+      else headerDrag = null;
+    });
+    return;
+  }
   // No meio de uma fórmula, clicar numa célula insere a referência a ela.
   const input = activeInput();
   if (input && canPoint(input)) {
@@ -1180,40 +1396,31 @@ canvas.addEventListener("pointermove", (event) => {
     draw();
     return;
   }
-  if (fillDrag) {
-    // Preenche no sentido em que o mouse mais se afastou da seleção.
-    const cell = cellAt(px, py);
-    const range = selectedRange();
-    const outside = (value: number, start: number, size: number) =>
-      value < start ? value - start : value >= start + size ? value - (start + size - 1) : 0;
-    const rows = outside(cell.row, range.row, range.rows);
-    const cols = outside(cell.col, range.col, range.cols);
-    if (rows === 0 && cols === 0) fillTarget = null;
-    else if (Math.abs(rows) >= Math.abs(cols)) fillTarget = { axis: "rows", to: cell.row };
-    else fillTarget = { axis: "cols", to: cell.col };
-    draw();
+  if (dragging || fillDrag || pointDrag || headerDrag) {
+    lastPointer = { px, py };
+    dragTo(px, py);
+    autoScroll();
     return;
   }
-  if (pointDrag) {
-    if (pointing) pointAt(pointing.input, pointing.from, cellAt(px, py));
-    return;
-  }
-  if (!dragging) {
-    const grip = gripAt(px, py);
-    const handle = fillHandle();
-    const onHandle = handle !== null && Math.abs(px - handle.x) <= HANDLE_GRIP && Math.abs(py - handle.y) <= HANDLE_GRIP;
-    canvas.style.cursor = grip ? (grip.kind === "col" ? "col-resize" : "row-resize") : onHandle ? "crosshair" : "cell";
-    return;
-  }
-  const cell = cellAt(px, py);
-  if (cell.col === pos.focus.col && cell.row === pos.focus.row) return;
-  pos.focus = cell;
-  draw();
-  syncFormulaBar();
+  const grip = gripAt(px, py);
+  const handle = fillHandle();
+  const onHandle = handle !== null && Math.abs(px - handle.x) <= HANDLE_GRIP && Math.abs(py - handle.y) <= HANDLE_GRIP;
+  const header = headerAt(px, py);
+  canvas.style.cursor = grip
+    ? grip.kind === "col"
+      ? "col-resize"
+      : "row-resize"
+    : onHandle
+      ? "crosshair"
+      : header
+        ? "pointer"
+        : "cell";
 });
 
 const endDrag = () => {
+  stopAutoScroll();
   dragging = false;
+  headerDrag = null;
   if (resizing) {
     const grip = resizing;
     resizing = null;
@@ -1343,6 +1550,7 @@ editor.addEventListener("input", () => {
   fx.value = editor.value;
   dirty = true;
   pointing = null;
+  updateSuggestions(editor);
   draw();
 });
 
@@ -1354,6 +1562,7 @@ editor.addEventListener("keydown", (event) => {
     ArrowDown: [0, 1],
   };
   const move = moves[event.key];
+  if (suggestionKey(event)) return;
   if (event.key === "Enter") {
     event.preventDefault();
     void commit(0, event.shiftKey ? -1 : 1);
@@ -1377,14 +1586,22 @@ fx.addEventListener("input", () => {
   dirty = true;
   pointing = null;
   if (editMode !== null) editor.value = fx.value;
+  updateSuggestions(fx);
   draw();
 });
 
 // Os intervalos da fórmula aparecem coloridos enquanto a barra tem o foco.
 fx.addEventListener("focus", draw);
-fx.addEventListener("blur", draw);
+fx.addEventListener("blur", () => {
+  if (suggestion?.input === fx) closeSuggestions();
+  draw();
+});
+editor.addEventListener("blur", () => {
+  if (suggestion?.input === editor) closeSuggestions();
+});
 
 fx.addEventListener("keydown", (event) => {
+  if (suggestionKey(event)) return;
   if (event.key === "Enter") {
     event.preventDefault();
     void commit(0, event.shiftKey ? -1 : 1);
@@ -1430,6 +1647,18 @@ textColor.addEventListener("change", () => void format("color", textColor.value)
 fillColor.addEventListener("change", () => void format("fill", fillColor.value));
 $("#no-fill").addEventListener("click", () => void format("fill", ""));
 
+for (const button of document.querySelectorAll<HTMLElement>("[data-size]")) {
+  button.addEventListener("click", () => {
+    const cell = { ...pos.anchor };
+    void format("size", button.dataset.size!).then(() => fitRow(cell));
+  });
+}
+valignSelect.addEventListener("change", () => {
+  const value = valignSelect.value;
+  // Como a lista de bordas, esta é um menu de ações e volta ao rótulo.
+  valignSelect.value = "";
+  if (value !== "") void format("valign", value);
+});
 mergeButton.addEventListener("click", () => void toggleMerge());
 borderSelect.addEventListener("change", () => {
   const kind = borderSelect.value as BorderKind | "";
@@ -1445,9 +1674,17 @@ canvas.addEventListener("contextmenu", (event) => {
   const { px, py } = pointerAt(event);
   const cell = cellAt(px, py);
   const range = selectedRange();
+  const header = headerAt(px, py);
   void (async () => {
     if (!(await write())) return;
-    if (!contains(range, cell.col, cell.row)) await select(cell);
+    if (header === "col" || header === "row") {
+      // Num cabeçalho, o menu vale para a coluna ou linha inteira.
+      const whole = header === "col" ? range.rows === MAX_ROWS : range.cols === MAX_COLS;
+      const inside = header === "col" ? cell.col >= range.col && cell.col < range.col + range.cols : cell.row >= range.row && cell.row < range.row + range.rows;
+      if (!whole || !inside) selectHeaders(header, cell, cell);
+    } else if (!contains(range, cell.col, cell.row)) {
+      await select(cell);
+    }
     menu.hidden = false;
     menu.style.left = `${Math.max(0, Math.min(event.clientX, window.innerWidth - menu.offsetWidth - 8))}px`;
     menu.style.top = `${Math.max(0, Math.min(event.clientY, window.innerHeight - menu.offsetHeight - 8))}px`;

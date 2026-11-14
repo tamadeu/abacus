@@ -11,7 +11,9 @@ use std::path::{Path, PathBuf};
 use ironcalc::base::UserModel;
 use ironcalc::base::ClipboardData;
 use ironcalc::base::expressions::types::Area;
-use ironcalc::base::types::{BorderItem, BorderStyle, CellType, Color, HorizontalAlignment, Style};
+use ironcalc::base::types::{
+    BorderItem, BorderStyle, CellType, Color, HorizontalAlignment, Style, VerticalAlignment,
+};
 use ironcalc::base::BorderArea;
 use ironcalc::export::save_xlsx_to_writer;
 use ironcalc::import::load_from_xlsx;
@@ -107,6 +109,10 @@ pub enum StyleProperty {
     Format,
     /// Quebra de texto: `"true"` ou `"false"`.
     Wrap,
+    /// Variação do tamanho da fonte, em pontos: `"1"` aumenta, `"-1"` diminui.
+    Size,
+    /// Alinhamento vertical: `"top"`, `"center"` ou `"bottom"`.
+    Valign,
 }
 
 impl StyleProperty {
@@ -122,6 +128,8 @@ impl StyleProperty {
             StyleProperty::Align => "alignment.horizontal",
             StyleProperty::Format => "num_fmt",
             StyleProperty::Wrap => "alignment.wrap_text",
+            StyleProperty::Size => "font.size_delta",
+            StyleProperty::Valign => "alignment.vertical",
         }
     }
 }
@@ -163,6 +171,11 @@ pub struct CellStyle {
     /// Alinhamento horizontal explícito. Sem ele, números ficam à direita e
     /// texto à esquerda.
     pub align: Option<Align>,
+    /// Alinhamento vertical. Sem ele, o conteúdo fica embaixo, como no Excel.
+    pub valign: Option<VAlign>,
+    /// Tamanho da fonte em porcentagem do tamanho padrão da pasta (200 é o
+    /// dobro). Ausente quando é o padrão.
+    pub size: Option<u16>,
     /// O texto quebra em várias linhas dentro da célula.
     pub wrap: bool,
     /// Bordas da célula, na ordem: cima, direita, baixo, esquerda.
@@ -186,6 +199,13 @@ pub enum Align {
     Left,
     Center,
     Right,
+}
+
+#[derive(Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum VAlign {
+    Top,
+    Center,
 }
 
 /// Uma planilha visível da pasta de trabalho.
@@ -313,11 +333,6 @@ impl Engine {
         let col_widths = sizes(left, MAX_COLS, MAX_VIEW_COLS, width, |col| self.model.get_column_width(sheet, col))?;
         let row_heights = sizes(top, MAX_ROWS, MAX_VIEW_ROWS, height, |row| self.model.get_row_height(sheet, row))?;
 
-        // Só percorre a parte da tela que tem dados.
-        let used = self.model.get_model().workbook.worksheet(sheet)?.dimension();
-        let bottom = (top + row_heights.len() as i32 - 1).min(used.max_row);
-        let right = (left + col_widths.len() as i32 - 1).min(used.max_column);
-
         let last_row = top + row_heights.len() as i32 - 1;
         let last_col = left + col_widths.len() as i32 - 1;
         let mut cells = Vec::new();
@@ -342,8 +357,10 @@ impl Engine {
                 cells.extend(self.cell_view(sheet, merge.row, merge.column)?);
             }
         }
-        for row in top.max(used.min_row)..=bottom {
-            for col in left.max(used.min_column)..=right {
+        // Percorre a tela inteira, e não só a parte com dados, porque uma
+        // linha ou coluna formatada por inteiro tem estilo em células vazias.
+        for row in top..=last_row {
+            for col in left..=last_col {
                 cells.extend(self.cell_view(sheet, row, col)?);
             }
         }
@@ -370,7 +387,7 @@ impl Engine {
     /// Mescla o intervalo numa célula só, centralizada, como o "Mesclar e
     /// centralizar" do Excel. Falha se mais de uma célula tiver conteúdo.
     pub fn merge(&mut self, sheet: u32, range: Range) -> Result<(), String> {
-        self.model.merge_cells_center(&area(sheet, range)?)
+        self.model.merge_cells_center(&small_area(sheet, range)?)
     }
 
     /// Desfaz as áreas mescladas que tocam o intervalo.
@@ -396,7 +413,7 @@ impl Engine {
             "type": kind,
         }))
         .map_err(|e| format!("borda inválida: {e}"))?;
-        self.model.set_area_with_border(&area(sheet, range)?, &border)
+        self.model.set_area_with_border(&small_area(sheet, range)?, &border)
     }
 
     /// Insere ou exclui `count` linhas ou colunas a partir de `index` (a
@@ -424,7 +441,20 @@ impl Engine {
 
     /// Apaga o conteúdo das células do retângulo, mantendo o estilo.
     pub fn clear(&mut self, sheet: u32, range: Range) -> Result<(), String> {
-        self.model.range_clear_contents(&area(sheet, range)?)
+        // Uma linha ou coluna inteira tem milhões de células, quase todas
+        // vazias: só a parte com dados precisa ser percorrida.
+        let mut area = area(sheet, range)?;
+        let used = self.model.get_model().workbook.worksheet(sheet)?.dimension();
+        let last_row = (area.row + area.height - 1).min(used.max_row);
+        let last_col = (area.column + area.width - 1).min(used.max_column);
+        area.row = area.row.max(used.min_row);
+        area.column = area.column.max(used.min_column);
+        if last_row < area.row || last_col < area.column {
+            return Ok(());
+        }
+        area.height = last_row - area.row + 1;
+        area.width = last_col - area.column + 1;
+        self.model.range_clear_contents(&area)
     }
 
     /// Preenche a partir do intervalo até a linha ou coluna `to` (a partir de
@@ -528,6 +558,17 @@ impl Engine {
                 ),
             })
         };
+        let valign = match style.alignment.as_ref().map(|a| &a.vertical) {
+            Some(VerticalAlignment::Top) => Some(VAlign::Top),
+            Some(VerticalAlignment::Center | VerticalAlignment::Distributed | VerticalAlignment::Justify) => {
+                Some(VAlign::Center)
+            }
+            _ => None,
+        };
+        // O tamanho é relativo à fonte padrão da pasta, que é 11 num arquivo
+        // do Excel e 12 numa pasta nova do IronCalc.
+        let base = self.model.get_model().workbook.styles.fonts.first().map_or(12, |font| font.sz).max(1);
+        let size = Some((style.font.sz.max(1) * 100 / base).clamp(10, 2000) as u16).filter(|size| *size != 100);
         let cell_style = CellStyle {
             bold: style.font.b,
             italic: style.font.i,
@@ -536,6 +577,8 @@ impl Engine {
             color: color(&style.font.color),
             fill: color(&style.fill.color),
             align,
+            valign,
+            size,
             wrap: style.alignment.as_ref().is_some_and(|a| a.wrap_text),
             borders: [
                 border(&style.border.top),
@@ -589,6 +632,16 @@ fn sizes(
 fn same_text(a: &str, b: &str) -> bool {
     let normalize = |text: &str| text.replace("\r\n", "\n").trim().to_string();
     normalize(a) == normalize(b)
+}
+
+/// Como [`area`], mas recusa intervalos enormes (como uma coluna inteira)
+/// para as operações que o IronCalc faz célula por célula.
+fn small_area(sheet: u32, range: Range) -> Result<Area, String> {
+    const LIMIT: u64 = 100_000;
+    if u64::from(range.cols) * u64::from(range.rows) > LIMIT {
+        return Err("o intervalo é grande demais para esta operação; selecione menos células".into());
+    }
+    area(sheet, range)
 }
 
 /// Aceita larguras e alturas entre 1 e 2000 pixels.
@@ -916,6 +969,78 @@ mod tests {
 
     fn range(col: u32, row: u32, cols: u32, rows: u32) -> Range {
         Range { col, row, cols, rows }
+    }
+
+    #[test]
+    fn whole_rows_and_columns() {
+        let mut e = engine(&[(1, 0, "10"), (1, 4, "20"), (2, 2, "fica")]);
+        let column_b = range(1, 0, 1, 1_048_576);
+        let row_3 = range(0, 2, 16_384, 1);
+
+        // Formatar a coluna inteira alcança as células que já existem.
+        e.format(0, column_b, StyleProperty::Bold, "true").unwrap();
+        assert!(cell(&e, 1, 0).unwrap().style.unwrap().bold);
+        assert!(cell(&e, 1, 4).unwrap().style.unwrap().bold);
+        assert_eq!(cell(&e, 2, 2).unwrap().style, None);
+        e.format(0, row_3, StyleProperty::Italic, "true").unwrap();
+        assert!(cell(&e, 2, 2).unwrap().style.unwrap().italic);
+
+        // Apagar a coluna inteira só mexe no que tem conteúdo.
+        e.clear(0, column_b).unwrap();
+        assert_eq!(cell(&e, 1, 0).unwrap().input, "");
+        assert_eq!(cell(&e, 1, 4).unwrap().input, "");
+        assert_eq!(shown(&e, 2, 2), "fica");
+        e.undo().unwrap();
+        assert_eq!(shown(&e, 1, 4), "20");
+        // Uma coluna sem nada não é erro.
+        e.clear(0, range(9, 0, 1, 1_048_576)).unwrap();
+
+        // Bordas e mesclagem numa coluna inteira são recusadas.
+        assert!(e.set_border(0, column_b, BorderKind::All).is_err());
+        assert!(e.merge(0, column_b).is_err());
+
+        // Copiar só leva a parte com dados. O formato de texto com tabulações
+        // escreve as linhas vazias como um par de aspas.
+        let copied = e.copy(0, column_b, false).unwrap();
+        assert_eq!(copied, "10\n\"\"\n\"\"\n\"\"\n20");
+    }
+
+    #[test]
+    fn font_size_and_vertical_alignment() {
+        let mut e = engine(&[(0, 0, "grande")]);
+        let a1 = range(0, 0, 1, 1);
+        assert_eq!(cell(&e, 0, 0).unwrap().style, None);
+        // Cada passo é um ponto sobre a fonte padrão de uma pasta nova, de 12.
+        for _ in 0..12 {
+            e.format(0, a1, StyleProperty::Size, "1").unwrap();
+        }
+        assert_eq!(cell(&e, 0, 0).unwrap().style.unwrap().size, Some(200));
+        for _ in 0..12 {
+            e.format(0, a1, StyleProperty::Size, "-1").unwrap();
+        }
+        assert_eq!(cell(&e, 0, 0).unwrap().style, None);
+
+        e.format(0, a1, StyleProperty::Valign, "top").unwrap();
+        assert_eq!(cell(&e, 0, 0).unwrap().style.unwrap().valign, Some(VAlign::Top));
+        e.format(0, a1, StyleProperty::Valign, "center").unwrap();
+        assert_eq!(cell(&e, 0, 0).unwrap().style.unwrap().valign, Some(VAlign::Center));
+        e.format(0, a1, StyleProperty::Valign, "bottom").unwrap();
+        assert_eq!(cell(&e, 0, 0).unwrap().style, None);
+    }
+
+    /// A lista de funções que a interface sugere ao digitar é uma cópia dos
+    /// nomes do IronCalc; este teste acusa se as duas se desencontrarem.
+    #[test]
+    fn suggested_functions_exist_in_the_engine() {
+        let names: Vec<String> = serde_json::from_str(include_str!("../../src/functions.json")).unwrap();
+        assert!(names.len() > 400);
+        let mut e = Engine::new().unwrap();
+        for name in &names {
+            e.set_cell(0, 0, 0, &format!("={name}()")).unwrap();
+            assert_ne!(shown(&e, 0, 0), "#NOME?", "{name}");
+        }
+        e.set_cell(0, 0, 0, "=FUNÇÃOQUENÃOEXISTE()").unwrap();
+        assert_eq!(shown(&e, 0, 0), "#NOME?");
     }
 
     #[test]

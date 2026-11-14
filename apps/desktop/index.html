@@ -27,6 +27,8 @@
       <button type="button" data-toggle="italic" aria-label="Itálico" title="Itálico (Ctrl+I)"><i>I</i></button>
       <button type="button" data-toggle="underline" aria-label="Sublinhado" title="Sublinhado (Ctrl+U)"><u>S</u></button>
       <button type="button" data-toggle="strike" aria-label="Tachado" title="Tachado"><s>ab</s></button>
+      <button type="button" data-size="-1" aria-label="Diminuir a fonte" title="Diminuir a fonte">A−</button>
+      <button type="button" data-size="1" aria-label="Aumentar a fonte" title="Aumentar a fonte">A+</button>
       <span class="separator" aria-hidden="true"></span>
       <label class="swatch" title="Cor do texto">
         Texto
@@ -36,7 +38,7 @@
         Fundo
         <input type="color" id="fill-color" aria-label="Cor de fundo" />
       </label>
-      <button type="button" id="no-fill">Sem fundo</button>
+      <button type="button" id="no-fill" title="Remover a cor de fundo">Sem cor</button>
       <span class="separator" aria-hidden="true"></span>
       <button type="button" data-align="left" aria-label="Alinhar à esquerda" title="Alinhar à esquerda">
         <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 6h16M4 12h10M4 18h14" /></svg>
@@ -47,7 +49,13 @@
       <button type="button" data-align="right" aria-label="Alinhar à direita" title="Alinhar à direita">
         <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 6h16M10 12h10M6 18h14" /></svg>
       </button>
-      <button type="button" data-toggle="wrap" title="Quebrar o texto dentro da célula">Quebrar texto</button>
+      <select id="valign" aria-label="Alinhamento vertical" title="Alinhamento vertical">
+        <option value="" selected>Vertical</option>
+        <option value="top">Em cima</option>
+        <option value="center">No meio</option>
+        <option value="bottom">Embaixo</option>
+      </select>
+      <button type="button" data-toggle="wrap" title="Quebrar o texto dentro da célula">Quebrar</button>
       <button type="button" id="merge-btn" title="Mesclar e centralizar; clique de novo para desfazer">Mesclar</button>
       <select id="borders" aria-label="Bordas" title="Bordas">
         <option value="" selected>Bordas</option>
@@ -90,6 +98,8 @@
       <button type="button" role="menuitem" data-action="insert-col-right">Inserir coluna à direita</button>
       <button type="button" role="menuitem" data-action="delete-cols">Excluir colunas selecionadas</button>
     </div>
+
+    <ul id="suggest" role="listbox" aria-label="Funções" hidden></ul>
 
     <footer>
       <div id="sheet-tabs" role="tablist" aria-label="Planilhas"></div>

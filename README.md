@@ -20,9 +20,12 @@ Projeto no início. O que já funciona:
 - Várias planilhas por arquivo: criar, renomear (dois cliques na aba) e
   excluir, com fórmulas entre planilhas.
 - Grade desenhada em canvas, com rolagem e seleção de uma célula ou de um
-  intervalo, por mouse ou teclado (Shift+setas).
+  intervalo, por mouse ou teclado (Shift+setas). Clicar num cabeçalho
+  seleciona a coluna ou a linha inteira, e arrastar além da borda rola a
+  planilha.
 - Formatação pela barra de ferramentas: negrito, itálico, sublinhado,
-  tachado, cor do texto, cor de fundo, alinhamento e formato numérico
+  tachado, tamanho da fonte, cor do texto, cor de fundo, alinhamento
+  horizontal e vertical e formato numérico
   (geral, duas casas, moeda, porcentagem), com Ctrl+B, Ctrl+I e Ctrl+U.
 - Larguras de coluna e alturas de linha: vêm do arquivo, mudam arrastando a
   borda do cabeçalho, e dois cliques na borda ajustam a coluna ao conteúdo.
@@ -34,8 +37,9 @@ Projeto no início. O que já funciona:
 - Edição direto na célula (digitando, com F2 ou com dois cliques) e pela
   barra de fórmulas; Enter, Tab e as setas gravam, Esc cancela e Delete apaga
   a seleção.
-- Ao escrever uma fórmula, os intervalos citados ficam coloridos na grade, e
-  clicar ou arrastar nas células insere a referência.
+- Ao escrever uma fórmula, os intervalos citados ficam coloridos na grade,
+  clicar ou arrastar nas células insere a referência, e uma lista sugere as
+  funções que começam com o que foi digitado (Tab aceita).
 - Alça de preenchimento no canto da seleção: arrastar continua sequências
   (1, 2, 3…) e copia fórmulas ajustando as referências.
 - Copiar, recortar e colar (Ctrl+C, Ctrl+X, Ctrl+V). Dentro do Ábaco a
@@ -56,16 +60,14 @@ Limitações conhecidas:
   documentação da Microsoft e não foram conferidos num Excel em português.
 - A coluna não alarga sozinha quando o número digitado não cabe; ele aparece
   como `####` até a coluna ser ajustada.
-- As referências coloridas aparecem na grade, mas não no texto da fórmula, e
-  não há sugestão de nomes de função ao digitar.
+- As referências coloridas aparecem na grade, mas não no texto da fórmula.
+- A lista de funções sugere só os nomes, sem descrição nem argumentos.
 - Clicar para inserir referência só funciona dentro da mesma planilha.
 - Colar para outros programas leva só os valores, sem formatação.
-- Tamanho e tipo de fonte, alinhamento vertical e gráficos do arquivo ainda
-  não aparecem na grade.
+- Tipo de fonte e gráficos do arquivo ainda não aparecem na grade.
 - As bordas aplicadas pela barra são sempre finas e pretas; as do arquivo
   aparecem com cor e espessura, mas a dupla é desenhada como grossa.
-- Não dá para selecionar uma linha ou coluna inteira clicando no cabeçalho.
-- A seleção não rola a tela ao arrastar o mouse para fora dela.
+- Bordas e mesclagem não funcionam numa linha ou coluna inteira.
 - Fechar a janela não avisa sobre alterações não salvas.
 - Arquivos gerados pela biblioteca openpyxl mostram `0` em células vazias que
   só têm estilo. É um defeito do importador do IronCalc com células gravadas
@@ -105,9 +107,9 @@ cargo test
 
 ## Próximos passos
 
-1. Sugestão de funções ao digitar uma fórmula.
-2. Seleção de linhas e colunas inteiras e rolagem ao arrastar.
-3. Tamanho de fonte e alinhamento vertical.
+1. Localizar e substituir.
+2. Congelar painéis e ocultar linhas e colunas.
+3. Classificar e filtrar.
 4. Propor o português do Brasil ao IronCalc original.
 5. Versão web com o motor em WebAssembly.
 
