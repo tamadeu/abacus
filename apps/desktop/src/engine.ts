@@ -67,8 +67,6 @@ export interface FileAccess {
   open(): Promise<string | null>;
   /** Salva em `path`; sem caminho, pergunta onde. Devolve o caminho usado, ou `null` se a pessoa cancelou. */
   save(path: string | null): Promise<string | null>;
-  /** Pergunta se as alterações não salvas podem ser descartadas. */
-  confirmDiscard(): Promise<boolean>;
 }
 
 /**
@@ -83,9 +81,18 @@ export interface Engine {
   readonly files: FileAccess | null;
   /** Se `format` tem efeito. */
   readonly formatting: boolean;
+  /** Pede confirmação para uma ação que não dá para desfazer sem perda. `okLabel` é o texto do botão que confirma. */
+  confirm(message: string, okLabel: string): Promise<boolean>;
   sheets(): Promise<SheetInfo[]>;
   /** Cria uma planilha vazia e devolve o índice dela. */
   addSheet(): Promise<number>;
+  renameSheet(sheet: number, name: string): Promise<void>;
+  /** Exclui uma planilha. Os índices das planilhas seguintes mudam. */
+  deleteSheet(sheet: number): Promise<void>;
+  /** Define a largura de uma coluna, em pixels. */
+  setColWidth(sheet: number, col: number, width: number): Promise<void>;
+  /** Define a altura de uma linha, em pixels. */
+  setRowHeight(sheet: number, row: number, height: number): Promise<void>;
   setCell(sheet: number, col: number, row: number, input: string): Promise<void>;
   /** O que cabe numa tela de `width` por `height` pixels a partir da célula dada. */
   view(sheet: number, firstCol: number, firstRow: number, width: number, height: number): Promise<View>;
@@ -118,15 +125,27 @@ class TauriEngine implements Engine {
       await invoke("save_file", { path: target });
       return target;
     },
-    confirmDiscard() {
-      return ask("As alterações não salvas serão perdidas. Continuar?", {
-        title: "Ábaco",
-        kind: "warning",
-        okLabel: "Descartar alterações",
-        cancelLabel: "Cancelar",
-      });
-    },
   };
+
+  confirm(message: string, okLabel: string): Promise<boolean> {
+    return ask(message, { title: "Ábaco", kind: "warning", okLabel, cancelLabel: "Cancelar" });
+  }
+
+  renameSheet(sheet: number, name: string): Promise<void> {
+    return invoke("rename_sheet", { sheet, name });
+  }
+
+  deleteSheet(sheet: number): Promise<void> {
+    return invoke("delete_sheet", { sheet });
+  }
+
+  setColWidth(sheet: number, col: number, width: number): Promise<void> {
+    return invoke("set_col_width", { sheet, col, width });
+  }
+
+  setRowHeight(sheet: number, row: number, height: number): Promise<void> {
+    return invoke("set_row_height", { sheet, row, height });
+  }
 
   sheets(): Promise<SheetInfo[]> {
     return invoke("get_sheets");
@@ -164,7 +183,7 @@ class TauriEngine implements Engine {
 /**
  * Substituto usado quando a interface roda no navegador (`npm run dev`),
  * fora do Tauri. Guarda o que foi digitado, mas não calcula fórmulas, não
- * formata, não desfaz edições e não abre nem salva arquivos.
+ * formata, não redimensiona, não desfaz edições e não abre nem salva arquivos.
  */
 class PreviewEngine implements Engine {
   readonly notice = "Pré-visualização no navegador (sem motor de cálculo)";
@@ -177,10 +196,34 @@ class PreviewEngine implements Engine {
     return this.names.map((name, index) => ({ index, name }));
   }
 
+  async confirm(message: string): Promise<boolean> {
+    return window.confirm(message);
+  }
+
   async addSheet(): Promise<number> {
     this.names.push(`Sheet${this.names.length + 1}`);
     return this.names.length - 1;
   }
+
+  async renameSheet(sheet: number, name: string): Promise<void> {
+    this.names[sheet] = name;
+  }
+
+  async deleteSheet(sheet: number): Promise<void> {
+    this.names.splice(sheet, 1);
+    // Remove as células da planilha e renumera as das seguintes.
+    const kept = new Map<string, CellView>();
+    for (const [key, cell] of this.cells) {
+      const index = Number(key.split(":")[0]);
+      if (index === sheet) continue;
+      kept.set(`${index > sheet ? index - 1 : index}:${cell.col},${cell.row}`, cell);
+    }
+    this.cells = kept;
+  }
+
+  async setColWidth(): Promise<void> {}
+
+  async setRowHeight(): Promise<void> {}
 
   async setCell(sheet: number, col: number, row: number, input: string): Promise<void> {
     const key = `${sheet}:${col},${row}`;

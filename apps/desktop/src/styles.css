@@ -20,6 +20,8 @@ body {
 }
 
 body {
+  user-select: none;
+  -webkit-user-select: none;
   display: flex;
   flex-direction: column;
   background: #fff;
@@ -211,6 +213,20 @@ footer {
   color: #3730a3;
   font-weight: 600;
   box-shadow: inset 0 -2px 0 var(--accent);
+}
+
+#sheet-tabs input {
+  width: 140px;
+  padding: 5px 10px;
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+  font: inherit;
+  color: inherit;
+}
+
+#sheet-tabs .remove-sheet {
+  padding: 6px 8px;
+  color: var(--muted);
 }
 
 #add-sheet {

@@ -196,6 +196,36 @@ impl Engine {
         Ok(self.model.get_selected_sheet())
     }
 
+    /// Muda o nome de uma planilha.
+    pub fn rename_sheet(&mut self, sheet: u32, name: &str) -> Result<(), String> {
+        let name = name.trim();
+        if name.is_empty() {
+            return Err("o nome da planilha não pode ficar vazio".into());
+        }
+        self.model.rename_sheet(sheet, name)
+    }
+
+    /// Exclui uma planilha. A pasta precisa ficar com pelo menos uma visível.
+    pub fn delete_sheet(&mut self, sheet: u32) -> Result<(), String> {
+        let visible = self.sheets();
+        if visible.len() == 1 && visible[0].index == sheet {
+            return Err("a pasta de trabalho precisa ter pelo menos uma planilha".into());
+        }
+        self.model.delete_sheet(sheet)
+    }
+
+    /// Define a largura de uma coluna, em pixels.
+    pub fn set_col_width(&mut self, sheet: u32, col: u32, width: f64) -> Result<(), String> {
+        let (_, col) = to_ironcalc(col, 0)?;
+        self.model.set_columns_width(sheet, col, col, check_size(width)?)
+    }
+
+    /// Define a altura de uma linha, em pixels.
+    pub fn set_row_height(&mut self, sheet: u32, row: u32, height: f64) -> Result<(), String> {
+        let (row, _) = to_ironcalc(0, row)?;
+        self.model.set_rows_height(sheet, row, row, check_size(height)?)
+    }
+
     /// Grava o conteúdo de uma célula. Texto vazio apaga a célula.
     pub fn set_cell(&mut self, sheet: u32, col: u32, row: u32, input: &str) -> Result<(), String> {
         let (row, col) = to_ironcalc(col, row)?;
@@ -301,6 +331,11 @@ fn sizes(
         }
     }
     Ok(sizes)
+}
+
+/// Aceita larguras e alturas entre 1 e 2000 pixels.
+fn check_size(size: f64) -> Result<f64, String> {
+    if (1.0..=2000.0).contains(&size) { Ok(size) } else { Err(format!("tamanho inválido: {size}")) }
 }
 
 /// Converte um retângulo da interface para a área do IronCalc.
@@ -503,6 +538,48 @@ mod tests {
         // A última coluna e a última linha da planilha encerram a tela.
         let end = e.view(0, 16_383, 1_048_575, 300.0, 100.0).unwrap();
         assert_eq!((end.col_widths.len(), end.row_heights.len()), (1, 1));
+    }
+
+    #[test]
+    fn resizes_columns_and_rows() {
+        let mut e = Engine::new().unwrap();
+        e.set_col_width(0, 1, 160.0).unwrap();
+        e.set_row_height(0, 2, 40.0).unwrap();
+        let view = e.view(0, 0, 0, 300.0, 80.0).unwrap();
+        assert_eq!(view.col_widths, [90.0, 160.0, 90.0]);
+        assert_eq!(view.row_heights, [25.0, 25.0, 40.0]);
+
+        e.undo().unwrap();
+        assert_eq!(e.view(0, 0, 0, 300.0, 80.0).unwrap().row_heights, [25.0, 25.0, 25.0, 25.0]);
+
+        for bad in [0.0, -5.0, 5000.0, f64::NAN] {
+            assert!(e.set_col_width(0, 0, bad).is_err(), "{bad}");
+            assert!(e.set_row_height(0, 0, bad).is_err(), "{bad}");
+        }
+        assert!(e.set_col_width(0, 16_384, 100.0).is_err());
+    }
+
+    #[test]
+    fn renames_and_deletes_sheets() {
+        let mut e = engine(&[(0, 0, "10")]);
+        let second = e.add_sheet().unwrap();
+        e.rename_sheet(0, "  Receitas ").unwrap();
+        e.set_cell(second, 0, 0, "=Receitas!A1*2").unwrap();
+        assert_eq!(e.sheets()[0].name, "Receitas");
+        assert_eq!(cell_in(&e, second, 0, 0).unwrap().display, "20");
+
+        assert!(e.rename_sheet(0, "   ").is_err());
+        let other = e.sheets()[1].name.clone();
+        assert!(e.rename_sheet(0, &other).is_err(), "nome repetido");
+        assert!(e.rename_sheet(9, "X").is_err());
+
+        e.delete_sheet(second).unwrap();
+        assert_eq!(e.sheets().len(), 1);
+        assert!(e.delete_sheet(0).is_err(), "não exclui a última planilha");
+        assert!(e.delete_sheet(9).is_err());
+
+        e.undo().unwrap();
+        assert_eq!(e.sheets().len(), 2);
     }
 
     #[test]

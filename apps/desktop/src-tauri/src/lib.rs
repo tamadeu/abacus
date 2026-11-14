@@ -78,6 +78,28 @@ fn add_sheet(state: State<'_, AppState>) -> Result<u32, String> {
 }
 
 #[tauri::command]
+fn rename_sheet(state: State<'_, AppState>, sheet: u32, name: String) -> Result<(), String> {
+    state.with(|engine| engine.rename_sheet(sheet, &name))
+}
+
+#[tauri::command]
+fn delete_sheet(state: State<'_, AppState>, sheet: u32) -> Result<(), String> {
+    state.with(|engine| engine.delete_sheet(sheet))
+}
+
+/// Define a largura de uma coluna, em pixels.
+#[tauri::command]
+fn set_col_width(state: State<'_, AppState>, sheet: u32, col: u32, width: f64) -> Result<(), String> {
+    state.with(|engine| engine.set_col_width(sheet, col, width))
+}
+
+/// Define a altura de uma linha, em pixels.
+#[tauri::command]
+fn set_row_height(state: State<'_, AppState>, sheet: u32, row: u32, height: f64) -> Result<(), String> {
+    state.with(|engine| engine.set_row_height(sheet, row, height))
+}
+
+#[tauri::command]
 fn undo(state: State<'_, AppState>) -> Result<(), String> {
     state.with(Engine::undo)
 }
@@ -118,6 +140,10 @@ pub fn run() {
             clear_cells,
             get_sheets,
             add_sheet,
+            rename_sheet,
+            delete_sheet,
+            set_col_width,
+            set_row_height,
             undo,
             redo,
             open_file,

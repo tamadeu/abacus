@@ -8,6 +8,10 @@ const MAX_ROWS = 1_048_576;
 const FONT = "Inter, system-ui, sans-serif";
 /** Espaço entre o texto e a borda da célula. */
 const PADDING = 8;
+/** Distância, em pixels, em que o mouse "pega" a borda de um cabeçalho. */
+const GRIP = 4;
+/** Menor largura de coluna ou altura de linha ao arrastar. */
+const MIN_SIZE = 8;
 
 const COLORS = {
   ink: "#1b1b29",
@@ -74,6 +78,17 @@ let rowY: number[] = [HEADER_HEIGHT];
 let dirty = false;
 /** O botão do mouse está pressionado, estendendo a seleção. */
 let dragging = false;
+
+/** Borda de cabeçalho que redimensiona a coluna ou linha de índice `index` na tela. */
+interface Grip {
+  kind: "col" | "row";
+  index: number;
+}
+
+/** Coluna ou linha sendo redimensionada com o mouse. */
+let resizing: Grip | null = null;
+/** O mouse já se moveu desde que a borda foi pega. */
+let resized = false;
 /** Arquivo aberto, ou `null` para uma pasta nova. */
 let filePath: string | null = null;
 /** A pasta tem alterações que não estão no arquivo. */
@@ -121,6 +136,28 @@ function bandAt(bounds: number[], pixel: number): number {
   while (index < bounds.length - 2 && bounds[index + 1] <= pixel) index++;
   return index;
 }
+
+/** Borda de cabeçalho sob um ponto do canvas, se houver. */
+function gripAt(px: number, py: number): Grip | null {
+  const near = (bounds: number[], pixel: number) => {
+    for (let index = 1; index < bounds.length; index++) {
+      if (Math.abs(bounds[index] - pixel) <= GRIP) return index - 1;
+    }
+    return -1;
+  };
+  if (py < HEADER_HEIGHT && px > HEADER_WIDTH) {
+    const index = near(colX, px);
+    return index < 0 ? null : { kind: "col", index };
+  }
+  if (px < HEADER_WIDTH && py > HEADER_HEIGHT) {
+    const index = near(rowY, py);
+    return index < 0 ? null : { kind: "row", index };
+  }
+  return null;
+}
+
+/** Fonte usada para desenhar o texto de uma célula. */
+const cellFont = (cell: CellView) => `${cell.style?.italic ? "italic " : ""}${cell.style?.bold ? "700 " : ""}14px ${FONT}`;
 
 /** Célula sob um ponto do canvas. */
 function cellAt(px: number, py: number): Cell {
@@ -183,11 +220,16 @@ function draw() {
     const anchorX = align === "right" ? left + cellWidth - PADDING : align === "center" ? left + cellWidth / 2 : left + PADDING;
 
     ctx.save();
-    ctx.font = `${style?.italic ? "italic " : ""}${style?.bold ? "700 " : ""}14px ${FONT}`;
+    ctx.font = cellFont(cell);
+    // Como no Excel, um número que não cabe na coluna vira uma fileira de "#".
+    let text = cell.display;
+    if (cell.kind === "number" && ctx.measureText(text).width > cellWidth - 2 * PADDING) {
+      text = "#".repeat(Math.max(0, Math.floor((cellWidth - 2 * PADDING) / ctx.measureText("#").width)));
+    }
     // Como no Excel, texto alinhado à esquerda invade as células vazias à direita.
     let clipWidth = cellWidth;
     if (cell.kind === "text" && align === "left") {
-      const needed = ctx.measureText(cell.display).width + 2 * PADDING;
+      const needed = ctx.measureText(text).width + 2 * PADDING;
       const lastCol = origin.col + colWidths.length - 1;
       for (let next = cell.col + 1; needed > clipWidth && next <= lastCol; next++) {
         if (cells.get(key(next, cell.row))?.display) break;
@@ -199,9 +241,9 @@ function draw() {
     ctx.clip();
     ctx.fillStyle = style?.color ?? (cell.kind === "error" ? COLORS.error : COLORS.ink);
     ctx.textAlign = align;
-    ctx.fillText(cell.display, anchorX, middle);
+    ctx.fillText(text, anchorX, middle);
     if (style?.underline || style?.strike) {
-      const textWidth = ctx.measureText(cell.display).width;
+      const textWidth = ctx.measureText(text).width;
       const start = align === "right" ? anchorX - textWidth : align === "center" ? anchorX - textWidth / 2 : anchorX;
       if (style.underline) ctx.fillRect(start, middle + 8, textWidth, 1);
       if (style.strike) ctx.fillRect(start, middle, textWidth, 1);
@@ -404,19 +446,101 @@ async function history(action: "undo" | "redo") {
   await refresh();
 }
 
+/** Último clique numa aba, para reconhecer o clique duplo. */
+let lastTabClick = { index: -1, time: 0 };
+
+/**
+ * Trata o clique numa aba: o primeiro mostra a planilha e o segundo, logo em
+ * seguida, renomeia. O evento `dblclick` não serve aqui porque o primeiro
+ * clique redesenha as abas e o segundo cai num elemento novo.
+ */
+function clickTab(tab: HTMLElement, info: SheetInfo) {
+  const now = performance.now();
+  const double = lastTabClick.index === info.index && now - lastTabClick.time < 500;
+  lastTabClick = { index: double ? -1 : info.index, time: now };
+  if (double) renameTab(tab, info);
+  else if (info.index !== sheet) void showSheet(info.index);
+}
+
 /** Redesenha as abas de planilha. */
 function renderTabs() {
-  sheetTabs.replaceChildren(
-    ...sheets.map((info) => {
-      const tab = document.createElement("button");
-      tab.type = "button";
-      tab.setAttribute("role", "tab");
-      tab.setAttribute("aria-selected", String(info.index === sheet));
-      tab.textContent = info.name;
-      tab.addEventListener("click", () => void showSheet(info.index));
-      return tab;
-    }),
-  );
+  const items: HTMLElement[] = [];
+  for (const info of sheets) {
+    const tab = document.createElement("button");
+    tab.type = "button";
+    tab.setAttribute("role", "tab");
+    tab.setAttribute("aria-selected", String(info.index === sheet));
+    tab.title = "Clique duas vezes para renomear";
+    tab.textContent = info.name;
+    tab.addEventListener("click", () => clickTab(tab, info));
+    items.push(tab);
+    if (info.index === sheet && sheets.length > 1) {
+      const remove = document.createElement("button");
+      remove.type = "button";
+      remove.className = "remove-sheet";
+      remove.textContent = "×";
+      remove.title = "Excluir planilha";
+      remove.setAttribute("aria-label", `Excluir a planilha ${info.name}`);
+      remove.addEventListener("click", () => void deleteSheet(info));
+      items.push(remove);
+    }
+  }
+  sheetTabs.replaceChildren(...items);
+}
+
+/** Troca a aba por um campo de texto para renomear a planilha. */
+function renameTab(tab: HTMLElement, info: SheetInfo) {
+  const input = document.createElement("input");
+  input.value = info.name;
+  input.setAttribute("aria-label", `Novo nome da planilha ${info.name}`);
+  // Enter e a perda de foco gravam; Esc cancela. `finish` roda uma vez só.
+  let finished = false;
+  const finish = async (save: boolean) => {
+    if (finished) return;
+    finished = true;
+    const name = input.value.trim();
+    if (save && name !== "" && name !== info.name) {
+      try {
+        await engine.renameSheet(info.index, name);
+        statusEl.textContent = "Pronto";
+        markModified();
+      } catch (error) {
+        statusEl.textContent = `Erro ao renomear a planilha: ${error}`;
+      }
+    }
+    await loadSheets();
+    canvas.focus();
+    // Fórmulas de outras planilhas podem citar o nome antigo.
+    await refresh();
+  };
+  input.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") void finish(true);
+    else if (event.key === "Escape") void finish(false);
+  });
+  input.addEventListener("blur", () => void finish(true));
+  tab.replaceWith(input);
+  input.focus();
+  input.select();
+}
+
+async function deleteSheet(info: SheetInfo) {
+  if (!(await write())) return;
+  try {
+    const confirmed = await engine.confirm(`Excluir a planilha "${info.name}" e todo o conteúdo dela?`, "Excluir planilha");
+    if (!confirmed) return;
+    await engine.deleteSheet(info.index);
+    statusEl.textContent = "Pronto";
+    markModified();
+  } catch (error) {
+    statusEl.textContent = `Erro ao excluir a planilha: ${error}`;
+    return;
+  }
+  // Os índices das planilhas seguintes mudaram, então as posições guardadas não valem mais.
+  positions = new Map();
+  pos = newPosition();
+  await loadSheets();
+  canvas.focus();
+  await refresh();
 }
 
 /** Lê do motor a lista de planilhas e garante que a atual ainda existe. */
@@ -462,7 +586,9 @@ async function openFile() {
   if (!files) return;
   if (!(await write())) return;
   try {
-    if (modified && !(await files.confirmDiscard())) return;
+    if (modified && !(await engine.confirm("As alterações não salvas serão perdidas. Continuar?", "Descartar alterações"))) {
+      return;
+    }
     const path = await files.open();
     if (path === null) return;
     filePath = path;
@@ -498,16 +624,36 @@ async function saveFile(askWhere: boolean) {
 }
 
 /** Posição de um evento do mouse dentro do canvas. */
-function pointerCell(event: PointerEvent): Cell {
+function pointerAt(event: MouseEvent) {
   const bounds = canvas.getBoundingClientRect();
-  return cellAt(event.clientX - bounds.left, event.clientY - bounds.top);
+  return { px: event.clientX - bounds.left, py: event.clientY - bounds.top };
+}
+
+/** Grava no motor o tamanho de uma coluna ou linha da tela. */
+async function resize(grip: Grip, size: number) {
+  try {
+    if (grip.kind === "col") await engine.setColWidth(sheet, pos.origin.col + grip.index, size);
+    else await engine.setRowHeight(sheet, pos.origin.row + grip.index, size);
+    statusEl.textContent = "Pronto";
+    markModified();
+  } catch (error) {
+    statusEl.textContent = `Erro ao redimensionar: ${error}`;
+  }
+  await refresh();
 }
 
 canvas.addEventListener("pointerdown", (event) => {
   if (event.button !== 0) return;
-  const bounds = canvas.getBoundingClientRect();
-  if (event.clientX - bounds.left < HEADER_WIDTH || event.clientY - bounds.top < HEADER_HEIGHT) return;
-  const cell = pointerCell(event);
+  const { px, py } = pointerAt(event);
+  const grip = gripAt(px, py);
+  if (grip) {
+    resizing = grip;
+    resized = false;
+    canvas.setPointerCapture(event.pointerId);
+    return;
+  }
+  if (px < HEADER_WIDTH || py < HEADER_HEIGHT) return;
+  const cell = cellAt(px, py);
   dragging = true;
   canvas.setPointerCapture(event.pointerId);
   // Clicar em outra célula no meio de uma edição grava a edição, como no Excel.
@@ -518,8 +664,26 @@ canvas.addEventListener("pointerdown", (event) => {
 });
 
 canvas.addEventListener("pointermove", (event) => {
-  if (!dragging) return;
-  const cell = pointerCell(event);
+  const { px, py } = pointerAt(event);
+  if (resizing) {
+    // Mostra o novo tamanho enquanto arrasta; o motor só é avisado ao soltar.
+    resized = true;
+    if (resizing.kind === "col") {
+      colWidths[resizing.index] = Math.max(MIN_SIZE, Math.round(px - colX[resizing.index]));
+      colX = edges(colWidths, HEADER_WIDTH);
+    } else {
+      rowHeights[resizing.index] = Math.max(MIN_SIZE, Math.round(py - rowY[resizing.index]));
+      rowY = edges(rowHeights, HEADER_HEIGHT);
+    }
+    draw();
+    return;
+  }
+  if (!dragging) {
+    const grip = gripAt(px, py);
+    canvas.style.cursor = grip ? (grip.kind === "col" ? "col-resize" : "row-resize") : "cell";
+    return;
+  }
+  const cell = cellAt(px, py);
   if (cell.col === pos.focus.col && cell.row === pos.focus.row) return;
   pos.focus = cell;
   draw();
@@ -528,9 +692,30 @@ canvas.addEventListener("pointermove", (event) => {
 
 const endDrag = () => {
   dragging = false;
+  if (resizing) {
+    const grip = resizing;
+    resizing = null;
+    // Um clique na borda, sem arrastar, não muda nada.
+    if (resized) void resize(grip, grip.kind === "col" ? colWidths[grip.index] : rowHeights[grip.index]);
+  }
 };
 canvas.addEventListener("pointerup", endDrag);
 canvas.addEventListener("pointercancel", endDrag);
+
+// Dois cliques na borda de uma coluna ajustam a largura ao conteúdo visível.
+canvas.addEventListener("dblclick", (event) => {
+  const { px, py } = pointerAt(event);
+  const grip = gripAt(px, py);
+  if (grip?.kind !== "col") return;
+  const col = pos.origin.col + grip.index;
+  let widest = 0;
+  for (const cell of cells.values()) {
+    if (cell.col !== col || cell.display === "") continue;
+    ctx.font = cellFont(cell);
+    widest = Math.max(widest, ctx.measureText(cell.display).width);
+  }
+  if (widest > 0) void resize(grip, Math.ceil(widest) + 2 * PADDING + 2);
+});
 
 canvas.addEventListener(
   "wheel",
@@ -568,6 +753,9 @@ canvas.addEventListener("keydown", (event) => {
   } else if (shortcut && letter === "y") {
     event.preventDefault();
     void history("redo");
+  } else if (shortcut && letter === "a") {
+    // Sem isto o navegador selecionaria o texto da página inteira.
+    event.preventDefault();
   } else if (shortcut && toggles[letter] && engine.formatting) {
     event.preventDefault();
     void toggle(toggles[letter]);
