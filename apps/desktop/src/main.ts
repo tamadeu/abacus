@@ -1,12 +1,13 @@
-import { createEngine, type CellView } from "./engine";
+import { createEngine, type CellView, type SheetInfo } from "./engine";
 
 const COL_WIDTH = 110;
 const ROW_HEIGHT = 26;
 const HEADER_WIDTH = 48;
 const HEADER_HEIGHT = 26;
-// Limites de uma planilha, iguais aos do Excel e aos do núcleo em Rust.
+// Limites de uma planilha, iguais aos do Excel.
 const MAX_COLS = 16_384;
 const MAX_ROWS = 1_048_576;
+const FONT = "Inter, system-ui, sans-serif";
 
 const COLORS = {
   ink: "#1b1b29",
@@ -20,23 +21,44 @@ const COLORS = {
 };
 
 const engine = createEngine();
-const wrap = document.querySelector<HTMLElement>("#grid-wrap")!;
-const canvas = document.querySelector<HTMLCanvasElement>("#grid")!;
+const $ = <T extends HTMLElement>(selector: string) => document.querySelector<T>(selector)!;
+const wrap = $("#grid-wrap");
+const canvas = $<HTMLCanvasElement>("#grid");
 const ctx = canvas.getContext("2d")!;
-const nameBox = document.querySelector<HTMLElement>("#name-box")!;
-const fx = document.querySelector<HTMLInputElement>("#fx")!;
-const statusEl = document.querySelector<HTMLElement>("#status")!;
+const nameBox = $("#name-box");
+const fx = $<HTMLInputElement>("#fx");
+const statusEl = $("#status");
+const docName = $("#doc-name");
+const docState = $("#doc-state");
+const sheetTabs = $("#sheet-tabs");
 
-/** Célula selecionada. */
-const selection = { col: 0, row: 0 };
-/** Primeira coluna e linha visíveis (a rolagem é por célula inteira). */
-const origin = { col: 0, row: 0 };
-/** Células preenchidas da janela visível, por "coluna,linha". */
+/** Onde a pessoa está em uma planilha. */
+interface Position {
+  /** Célula selecionada. */
+  selection: { col: number; row: number };
+  /** Primeira coluna e linha visíveis (a rolagem é por célula inteira). */
+  origin: { col: number; row: number };
+}
+
+const newPosition = (): Position => ({ selection: { col: 0, row: 0 }, origin: { col: 0, row: 0 } });
+
+/** Planilhas da pasta aberta e a posição guardada em cada uma. */
+let sheets: SheetInfo[] = [];
+let positions = new Map<number, Position>();
+/** Índice da planilha na tela. */
+let sheet = 0;
+let { selection, origin } = newPosition();
+/** Células da janela visível, por "coluna,linha". */
 let cells = new Map<string, CellView>();
 /** Há texto na barra de fórmulas que ainda não foi gravado na célula. */
 let dirty = false;
+/** Arquivo aberto, ou `null` para uma pasta nova. */
+let filePath: string | null = null;
+/** A pasta tem alterações que não estão no arquivo. */
+let modified = false;
 
 const key = (col: number, row: number) => `${col},${row}`;
+const clamp = (value: number, max: number) => Math.min(Math.max(value, 0), max);
 
 function colName(col: number): string {
   let name = "";
@@ -81,26 +103,6 @@ function draw() {
   ctx.fillStyle = "#fff";
   ctx.fillRect(0, 0, width, height);
 
-  // Cabeçalhos
-  ctx.fillStyle = COLORS.header;
-  ctx.fillRect(0, 0, width, HEADER_HEIGHT);
-  ctx.fillRect(0, 0, HEADER_WIDTH, height);
-  ctx.fillStyle = COLORS.headerActive;
-  ctx.fillRect(x(selection.col), 0, COL_WIDTH, HEADER_HEIGHT);
-  ctx.fillRect(0, y(selection.row), HEADER_WIDTH, ROW_HEIGHT);
-
-  ctx.font = "13px Inter, system-ui, sans-serif";
-  ctx.textBaseline = "middle";
-  ctx.textAlign = "center";
-  for (let c = origin.col; c < origin.col + cols && c < MAX_COLS; c++) {
-    ctx.fillStyle = c === selection.col ? COLORS.headerActiveInk : COLORS.muted;
-    ctx.fillText(colName(c), x(c) + COL_WIDTH / 2, HEADER_HEIGHT / 2);
-  }
-  for (let r = origin.row; r < origin.row + rows && r < MAX_ROWS; r++) {
-    ctx.fillStyle = r === selection.row ? COLORS.headerActiveInk : COLORS.muted;
-    ctx.fillText(String(r + 1), HEADER_WIDTH / 2, y(r) + ROW_HEIGHT / 2);
-  }
-
   // Linhas de grade
   ctx.strokeStyle = COLORS.line;
   ctx.lineWidth = 1;
@@ -115,27 +117,82 @@ function draw() {
   }
   ctx.stroke();
 
-  // Conteúdo das células
-  ctx.font = "14px Inter, system-ui, sans-serif";
+  // Fundos coloridos, antes do texto. Como no Excel, cobrem as linhas de
+  // grade à direita e abaixo da célula.
   for (const cell of cells.values()) {
+    if (!cell.style?.fill) continue;
+    ctx.fillStyle = cell.style.fill;
+    ctx.fillRect(x(cell.col) + 1, y(cell.row) + 1, COL_WIDTH, ROW_HEIGHT);
+  }
+
+  // Conteúdo das células
+  ctx.textBaseline = "middle";
+  for (const cell of cells.values()) {
+    if (cell.display === "") continue;
+    const style = cell.style;
     const left = x(cell.col);
-    const top = y(cell.row);
+    const middle = y(cell.row) + ROW_HEIGHT / 2 + 1;
+    const align = style?.align ?? (cell.kind === "number" ? "right" : cell.kind === "error" ? "center" : "left");
+    const anchor = align === "right" ? left + COL_WIDTH - 8 : align === "center" ? left + COL_WIDTH / 2 : left + 8;
+
     ctx.save();
+    ctx.font = `${style?.italic ? "italic " : ""}${style?.bold ? "700 " : ""}14px ${FONT}`;
+    // Como no Excel, texto alinhado à esquerda invade as células vazias à direita.
+    let span = 1;
+    if (cell.kind === "text" && align === "left") {
+      const needed = ctx.measureText(cell.display).width + 16;
+      while (needed > span * COL_WIDTH && !cells.get(key(cell.col + span, cell.row))?.display) span++;
+    }
     ctx.beginPath();
-    ctx.rect(left + 1, top + 1, COL_WIDTH - 1, ROW_HEIGHT - 1);
+    ctx.rect(left + 1, y(cell.row) + 1, span * COL_WIDTH - 1, ROW_HEIGHT - 1);
     ctx.clip();
-    ctx.fillStyle = cell.kind === "error" ? COLORS.error : COLORS.ink;
-    if (cell.kind === "number") {
-      ctx.textAlign = "right";
-      ctx.fillText(cell.display, left + COL_WIDTH - 8, top + ROW_HEIGHT / 2 + 1);
-    } else if (cell.kind === "error") {
-      ctx.textAlign = "center";
-      ctx.fillText(cell.display, left + COL_WIDTH / 2, top + ROW_HEIGHT / 2 + 1);
-    } else {
-      ctx.textAlign = "left";
-      ctx.fillText(cell.display, left + 8, top + ROW_HEIGHT / 2 + 1);
+    ctx.fillStyle = style?.color ?? (cell.kind === "error" ? COLORS.error : COLORS.ink);
+    ctx.textAlign = align;
+    ctx.fillText(cell.display, anchor, middle);
+    if (style?.underline || style?.strike) {
+      const textWidth = ctx.measureText(cell.display).width;
+      const start = align === "right" ? anchor - textWidth : align === "center" ? anchor - textWidth / 2 : anchor;
+      if (style.underline) ctx.fillRect(start, middle + 8, textWidth, 1);
+      if (style.strike) ctx.fillRect(start, middle, textWidth, 1);
     }
     ctx.restore();
+  }
+
+  // Cabeçalhos, por cima das células
+  ctx.fillStyle = COLORS.header;
+  ctx.fillRect(0, 0, width, HEADER_HEIGHT);
+  ctx.fillRect(0, 0, HEADER_WIDTH, height);
+  ctx.fillStyle = COLORS.headerActive;
+  ctx.fillRect(x(selection.col), 0, COL_WIDTH, HEADER_HEIGHT);
+  ctx.fillRect(0, y(selection.row), HEADER_WIDTH, ROW_HEIGHT);
+  ctx.fillStyle = COLORS.header;
+  ctx.fillRect(0, 0, HEADER_WIDTH, HEADER_HEIGHT);
+
+  ctx.strokeStyle = COLORS.line;
+  ctx.beginPath();
+  for (let c = origin.col; c <= origin.col + cols; c++) {
+    ctx.moveTo(x(c) + 0.5, 0);
+    ctx.lineTo(x(c) + 0.5, HEADER_HEIGHT);
+  }
+  for (let r = origin.row; r <= origin.row + rows; r++) {
+    ctx.moveTo(0, y(r) + 0.5);
+    ctx.lineTo(HEADER_WIDTH, y(r) + 0.5);
+  }
+  ctx.moveTo(0, HEADER_HEIGHT + 0.5);
+  ctx.lineTo(width, HEADER_HEIGHT + 0.5);
+  ctx.moveTo(HEADER_WIDTH + 0.5, 0);
+  ctx.lineTo(HEADER_WIDTH + 0.5, height);
+  ctx.stroke();
+
+  ctx.font = `13px ${FONT}`;
+  ctx.textAlign = "center";
+  for (let c = origin.col; c < origin.col + cols && c < MAX_COLS; c++) {
+    ctx.fillStyle = c === selection.col ? COLORS.headerActiveInk : COLORS.muted;
+    ctx.fillText(colName(c), x(c) + COL_WIDTH / 2, HEADER_HEIGHT / 2);
+  }
+  for (let r = origin.row; r < origin.row + rows && r < MAX_ROWS; r++) {
+    ctx.fillStyle = r === selection.row ? COLORS.headerActiveInk : COLORS.muted;
+    ctx.fillText(String(r + 1), HEADER_WIDTH / 2, y(r) + ROW_HEIGHT / 2);
   }
 
   // Seleção
@@ -150,13 +207,23 @@ function syncFormulaBar() {
   fx.value = cells.get(key(selection.col, selection.row))?.input ?? "";
 }
 
+/** Atualiza o nome do arquivo e o estado de gravação no cabeçalho. */
+function syncDocument() {
+  docName.textContent = filePath?.split(/[\\/]/).pop() ?? "Sem título";
+  docState.textContent = modified ? "Alterações não salvas" : filePath ? "Salvo" : (engine.notice ?? "");
+}
+
+function markModified() {
+  modified = true;
+  syncDocument();
+}
+
 /** Busca no motor as células da janela visível e redesenha. */
 async function refresh() {
   try {
     const { cols, rows } = visibleSize();
-    const view = await engine.view(origin.col, origin.row, cols, rows);
+    const view = await engine.view(sheet, origin.col, origin.row, cols, rows);
     cells = new Map(view.map((cell) => [key(cell.col, cell.row), cell]));
-    statusEl.textContent = "Pronto";
   } catch (error) {
     statusEl.textContent = `Erro ao ler a planilha: ${error}`;
   }
@@ -165,17 +232,24 @@ async function refresh() {
 }
 
 async function select(col: number, row: number) {
-  selection.col = Math.min(Math.max(col, 0), MAX_COLS - 1);
-  selection.row = Math.min(Math.max(row, 0), MAX_ROWS - 1);
+  selection.col = clamp(col, MAX_COLS - 1);
+  selection.row = clamp(row, MAX_ROWS - 1);
   scrollToSelection();
   await refresh();
 }
 
 /** Grava o texto da barra de fórmulas na célula selecionada. */
 async function write(): Promise<boolean> {
-  try {
-    await engine.setCell(selection.col, selection.row, fx.value);
+  const current = cells.get(key(selection.col, selection.row))?.input ?? "";
+  if (fx.value === current) {
     dirty = false;
+    return true;
+  }
+  try {
+    await engine.setCell(sheet, selection.col, selection.row, fx.value);
+    dirty = false;
+    statusEl.textContent = "Pronto";
+    markModified();
     return true;
   } catch (error) {
     statusEl.textContent = `Erro ao gravar a célula: ${error}`;
@@ -198,7 +272,103 @@ async function history(action: "undo" | "redo") {
     statusEl.textContent = `Erro ao ${action === "undo" ? "desfazer" : "refazer"}: ${error}`;
     return;
   }
+  markModified();
+  // Desfazer pode criar ou remover uma planilha.
+  await loadSheets();
   await refresh();
+}
+
+/** Redesenha as abas de planilha. */
+function renderTabs() {
+  sheetTabs.replaceChildren(
+    ...sheets.map((info) => {
+      const tab = document.createElement("button");
+      tab.type = "button";
+      tab.setAttribute("role", "tab");
+      tab.setAttribute("aria-selected", String(info.index === sheet));
+      tab.textContent = info.name;
+      tab.addEventListener("click", () => void showSheet(info.index));
+      return tab;
+    }),
+  );
+}
+
+/** Lê do motor a lista de planilhas e garante que a atual ainda existe. */
+async function loadSheets() {
+  try {
+    sheets = await engine.sheets();
+  } catch (error) {
+    statusEl.textContent = `Erro ao ler as planilhas: ${error}`;
+    return;
+  }
+  if (!sheets.some((info) => info.index === sheet) && sheets.length > 0) {
+    sheet = sheets[0].index;
+    ({ selection, origin } = positions.get(sheet) ?? newPosition());
+  }
+  renderTabs();
+}
+
+/** Troca a planilha na tela, guardando a posição da anterior. */
+async function showSheet(index: number) {
+  if (dirty && !(await write())) return;
+  positions.set(sheet, { selection, origin });
+  sheet = index;
+  ({ selection, origin } = positions.get(index) ?? newPosition());
+  renderTabs();
+  canvas.focus();
+  await refresh();
+}
+
+async function addSheet() {
+  if (dirty && !(await write())) return;
+  try {
+    const index = await engine.addSheet();
+    markModified();
+    await loadSheets();
+    await showSheet(index);
+  } catch (error) {
+    statusEl.textContent = `Erro ao criar a planilha: ${error}`;
+  }
+}
+
+async function openFile() {
+  const files = engine.files;
+  if (!files) return;
+  if (dirty && !(await write())) return;
+  try {
+    if (modified && !(await files.confirmDiscard())) return;
+    const path = await files.open();
+    if (path === null) return;
+    filePath = path;
+    modified = false;
+    positions = new Map();
+    sheet = 0;
+    ({ selection, origin } = newPosition());
+    statusEl.textContent = "Pronto";
+    syncDocument();
+    await loadSheets();
+    await refresh();
+  } catch (error) {
+    statusEl.textContent = `Erro ao abrir o arquivo: ${error}`;
+  }
+  canvas.focus();
+}
+
+async function saveFile(askWhere: boolean) {
+  const files = engine.files;
+  if (!files) return;
+  if (dirty && !(await write())) return;
+  try {
+    const path = await files.save(askWhere ? null : filePath);
+    if (path === null) return;
+    filePath = path;
+    modified = false;
+    statusEl.textContent = "Arquivo salvo";
+    syncDocument();
+  } catch (error) {
+    statusEl.textContent = `Erro ao salvar o arquivo: ${error}`;
+  }
+  canvas.focus();
 }
 
 canvas.addEventListener("mousedown", (event) => {
@@ -223,9 +393,9 @@ canvas.addEventListener(
     const delta = horizontal ? event.deltaX || event.deltaY : event.deltaY;
     if (delta === 0) return;
     if (horizontal) {
-      origin.col = Math.min(Math.max(origin.col + Math.sign(delta), 0), MAX_COLS - 1);
+      origin.col = clamp(origin.col + Math.sign(delta), MAX_COLS - 1);
     } else {
-      origin.row = Math.min(Math.max(origin.row + Math.sign(delta) * 3, 0), MAX_ROWS - 1);
+      origin.row = clamp(origin.row + Math.sign(delta) * 3, MAX_ROWS - 1);
     }
     void refresh();
   },
@@ -286,8 +456,27 @@ fx.addEventListener("keydown", (event) => {
   }
 });
 
+// Atalhos de arquivo valem na janela toda.
+window.addEventListener("keydown", (event) => {
+  if (!(event.ctrlKey || event.metaKey) || event.altKey) return;
+  const letter = event.key.toLowerCase();
+  if (letter === "o") {
+    event.preventDefault();
+    void openFile();
+  } else if (letter === "s") {
+    event.preventDefault();
+    void saveFile(event.shiftKey);
+  }
+});
+
+$("#open-btn").addEventListener("click", () => void openFile());
+$("#save-btn").addEventListener("click", () => void saveFile(false));
+$("#save-as-btn").addEventListener("click", () => void saveFile(true));
+$("#add-sheet").addEventListener("click", () => void addSheet());
+$("#file-actions").hidden = engine.files === null;
+
 new ResizeObserver(() => void refresh()).observe(wrap);
 
-document.querySelector<HTMLElement>("#engine-label")!.textContent = engine.label;
+syncDocument();
 canvas.focus();
-void refresh();
+void loadSheets().then(refresh);

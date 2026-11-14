@@ -4,13 +4,18 @@ Suíte de escritório de código aberto, começando pela planilha. O aplicativo
 desktop usa [Tauri](https://tauri.app) e o motor de cálculo é o
 [IronCalc](https://www.ironcalc.com), ambos em Rust.
 
-![Ábaco com valores, fórmulas, uma matriz dinâmica e um erro de divisão por zero](docs/screenshot.png)
+![Ábaco com um relatório financeiro aberto de um arquivo .xlsx, com cores, negrito e valores em reais](docs/screenshot.png)
 
 ## Estado atual
 
 Projeto no início. O que já funciona:
 
+- Abrir e salvar arquivos `.xlsx` (Ctrl+O, Ctrl+S, Ctrl+Shift+S), com aviso
+  antes de descartar alterações não salvas.
+- Várias planilhas por arquivo, com abas e fórmulas entre planilhas.
 - Grade desenhada em canvas, com seleção por mouse e teclado e rolagem.
+- Estilos vindos do arquivo: negrito, itálico, sublinhado, tachado, cor do
+  texto, cor de fundo, alinhamento e formatos numéricos.
 - Edição pela barra de fórmulas (Enter, Tab e Esc).
 - Desfazer e refazer (Ctrl+Z, Ctrl+Y).
 - As fórmulas e funções do IronCalc, incluindo `LET`, `LAMBDA` e matrizes
@@ -21,8 +26,15 @@ Limitações conhecidas:
 - O IronCalc 0.9 ainda não tem português. Os números usam a localidade
   espanhola, que tem o mesmo formato do Brasil (`18.500,00`, `;` entre
   argumentos), e os nomes de função ficam em inglês (`SUM`, não `SOMA`).
-  `R$` ainda não é reconhecido como moeda.
-- Ainda não há abrir nem salvar arquivos: a planilha vive só na memória.
+  `R$` digitado numa célula ainda não é reconhecido como moeda.
+- Os estilos são exibidos, mas ainda não dá para alterá-los pela interface.
+- Larguras de coluna, alturas de linha, células mescladas, bordas e gráficos
+  do arquivo ainda não aparecem na grade.
+- Fechar a janela não avisa sobre alterações não salvas.
+- Arquivos gerados pela biblioteca openpyxl mostram `0` em células vazias que
+  só têm estilo. É um defeito do importador do IronCalc com células gravadas
+  como `t="n"` sem valor; arquivos no formato que o Excel grava não têm o
+  problema.
 
 ## Estrutura
 
@@ -57,10 +69,10 @@ cargo test
 
 ## Próximos passos
 
-1. Abrir e salvar `.xlsx` (o IronCalc já lê e grava o formato).
-2. Localidade e nomes de função em português, no IronCalc.
-3. Estilos de célula e formatos numéricos na interface.
-4. Várias planilhas por pasta de trabalho.
+1. Localidade e nomes de função em português, no IronCalc.
+2. Formatação pela interface (negrito, cores, formato numérico).
+3. Larguras de coluna, alturas de linha e células mescladas.
+4. Renomear, excluir e reordenar planilhas.
 5. Versão web com o motor em WebAssembly.
 
 ## Licença

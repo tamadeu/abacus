@@ -11,9 +11,14 @@
   <body>
     <header class="titlebar">
       <div class="logo" aria-hidden="true">Á</div>
-      <div>
-        <h1>Ábaco</h1>
-        <p id="engine-label"></p>
+      <div class="doc">
+        <h1 id="doc-name">Sem título</h1>
+        <p id="doc-state"></p>
+      </div>
+      <div class="actions" id="file-actions">
+        <button type="button" id="open-btn">Abrir</button>
+        <button type="button" id="save-btn">Salvar</button>
+        <button type="button" id="save-as-btn">Salvar como</button>
       </div>
     </header>
 
@@ -28,6 +33,8 @@
     </main>
 
     <footer>
+      <div id="sheet-tabs" role="tablist" aria-label="Planilhas"></div>
+      <button type="button" id="add-sheet" aria-label="Nova planilha" title="Nova planilha">+</button>
       <span id="status" role="status">Pronto</span>
     </footer>
   </body>
