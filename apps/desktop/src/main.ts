@@ -1,13 +1,13 @@
-import { createEngine, type CellView, type SheetInfo } from "./engine";
+import { createEngine, type CellView, type Range, type SheetInfo, type StyleProperty } from "./engine";
 
-const COL_WIDTH = 110;
-const ROW_HEIGHT = 26;
 const HEADER_WIDTH = 48;
 const HEADER_HEIGHT = 26;
 // Limites de uma planilha, iguais aos do Excel.
 const MAX_COLS = 16_384;
 const MAX_ROWS = 1_048_576;
 const FONT = "Inter, system-ui, sans-serif";
+/** Espaço entre o texto e a borda da célula. */
+const PADDING = 8;
 
 const COLORS = {
   ink: "#1b1b29",
@@ -17,6 +17,7 @@ const COLORS = {
   headerActive: "#dcd9fa",
   headerActiveInk: "#3730a3",
   accent: "#4f46e5",
+  selection: "rgba(79, 70, 229, 0.1)",
   error: "#b42318",
 };
 
@@ -31,27 +32,48 @@ const statusEl = $("#status");
 const docName = $("#doc-name");
 const docState = $("#doc-state");
 const sheetTabs = $("#sheet-tabs");
+const textColor = $<HTMLInputElement>("#text-color");
+const fillColor = $<HTMLInputElement>("#fill-color");
+
+interface Cell {
+  col: number;
+  row: number;
+}
 
 /** Onde a pessoa está em uma planilha. */
 interface Position {
-  /** Célula selecionada. */
-  selection: { col: number; row: number };
+  /** Célula ativa: a que recebe o que for digitado. */
+  anchor: Cell;
+  /** Canto oposto da seleção. Igual à âncora quando há uma célula só. */
+  focus: Cell;
   /** Primeira coluna e linha visíveis (a rolagem é por célula inteira). */
-  origin: { col: number; row: number };
+  origin: Cell;
 }
 
-const newPosition = (): Position => ({ selection: { col: 0, row: 0 }, origin: { col: 0, row: 0 } });
+const newPosition = (): Position => ({
+  anchor: { col: 0, row: 0 },
+  focus: { col: 0, row: 0 },
+  origin: { col: 0, row: 0 },
+});
 
 /** Planilhas da pasta aberta e a posição guardada em cada uma. */
 let sheets: SheetInfo[] = [];
 let positions = new Map<number, Position>();
 /** Índice da planilha na tela. */
 let sheet = 0;
-let { selection, origin } = newPosition();
-/** Células da janela visível, por "coluna,linha". */
+let pos = newPosition();
+/** Células da tela, por "coluna,linha". */
 let cells = new Map<string, CellView>();
+/** Tamanhos das colunas e linhas da tela, a partir de `pos.origin`. */
+let colWidths: number[] = [];
+let rowHeights: number[] = [];
+/** Posição em pixels de cada borda: `colX[i]` é onde começa a i-ésima coluna da tela. */
+let colX: number[] = [HEADER_WIDTH];
+let rowY: number[] = [HEADER_HEIGHT];
 /** Há texto na barra de fórmulas que ainda não foi gravado na célula. */
 let dirty = false;
+/** O botão do mouse está pressionado, estendendo a seleção. */
+let dragging = false;
 /** Arquivo aberto, ou `null` para uma pasta nova. */
 let filePath: string | null = null;
 /** A pasta tem alterações que não estão no arquivo. */
@@ -68,22 +90,44 @@ function colName(col: number): string {
   return name;
 }
 
-/** Quantas colunas e linhas cabem (mesmo que parcialmente) na tela. */
-function visibleSize() {
+const cellName = (cell: Cell) => colName(cell.col) + (cell.row + 1);
+
+/** Retângulo selecionado, da âncora ao foco. */
+function selectedRange(): Range {
+  const { anchor, focus } = pos;
   return {
-    cols: Math.max(1, Math.ceil((wrap.clientWidth - HEADER_WIDTH) / COL_WIDTH)),
-    rows: Math.max(1, Math.ceil((wrap.clientHeight - HEADER_HEIGHT) / ROW_HEIGHT)),
+    col: Math.min(anchor.col, focus.col),
+    row: Math.min(anchor.row, focus.row),
+    cols: Math.abs(anchor.col - focus.col) + 1,
+    rows: Math.abs(anchor.row - focus.row) + 1,
   };
 }
 
-/** Ajusta a rolagem para a célula selecionada ficar inteira na tela. */
-function scrollToSelection() {
-  const fullCols = Math.max(1, Math.floor((wrap.clientWidth - HEADER_WIDTH) / COL_WIDTH));
-  const fullRows = Math.max(1, Math.floor((wrap.clientHeight - HEADER_HEIGHT) / ROW_HEIGHT));
-  if (selection.col < origin.col) origin.col = selection.col;
-  if (selection.col >= origin.col + fullCols) origin.col = selection.col - fullCols + 1;
-  if (selection.row < origin.row) origin.row = selection.row;
-  if (selection.row >= origin.row + fullRows) origin.row = selection.row - fullRows + 1;
+/** Bordas acumuladas: começa em `start` e soma cada tamanho. */
+function edges(sizes: number[], start: number): number[] {
+  const out = [start];
+  for (const size of sizes) out.push(out[out.length - 1] + size);
+  return out;
+}
+
+/** Pixel onde começa a coluna, limitado à área visível. */
+const xOf = (col: number) => colX[clamp(col - pos.origin.col, colX.length - 1)];
+/** Pixel onde começa a linha, limitado à área visível. */
+const yOf = (row: number) => rowY[clamp(row - pos.origin.row, rowY.length - 1)];
+
+/** Índice da faixa que contém o pixel, dadas as bordas acumuladas. */
+function bandAt(bounds: number[], pixel: number): number {
+  let index = 0;
+  while (index < bounds.length - 2 && bounds[index + 1] <= pixel) index++;
+  return index;
+}
+
+/** Célula sob um ponto do canvas. */
+function cellAt(px: number, py: number): Cell {
+  return {
+    col: clamp(pos.origin.col + bandAt(colX, px), MAX_COLS - 1),
+    row: clamp(pos.origin.row + bandAt(rowY, py), MAX_ROWS - 1),
+  };
 }
 
 function draw() {
@@ -96,33 +140,33 @@ function draw() {
   canvas.style.height = `${height}px`;
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
-  const { cols, rows } = visibleSize();
-  const x = (col: number) => HEADER_WIDTH + (col - origin.col) * COL_WIDTH;
-  const y = (row: number) => HEADER_HEIGHT + (row - origin.row) * ROW_HEIGHT;
+  const { origin, anchor } = pos;
+  const range = selectedRange();
+  const gridLines = (toX: number, toY: number) => {
+    ctx.strokeStyle = COLORS.line;
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    for (const x of colX) {
+      ctx.moveTo(x + 0.5, 0);
+      ctx.lineTo(x + 0.5, toY);
+    }
+    for (const y of rowY) {
+      ctx.moveTo(0, y + 0.5);
+      ctx.lineTo(toX, y + 0.5);
+    }
+    ctx.stroke();
+  };
 
   ctx.fillStyle = "#fff";
   ctx.fillRect(0, 0, width, height);
-
-  // Linhas de grade
-  ctx.strokeStyle = COLORS.line;
-  ctx.lineWidth = 1;
-  ctx.beginPath();
-  for (let c = origin.col; c <= origin.col + cols; c++) {
-    ctx.moveTo(x(c) + 0.5, 0);
-    ctx.lineTo(x(c) + 0.5, height);
-  }
-  for (let r = origin.row; r <= origin.row + rows; r++) {
-    ctx.moveTo(0, y(r) + 0.5);
-    ctx.lineTo(width, y(r) + 0.5);
-  }
-  ctx.stroke();
+  gridLines(width, height);
 
   // Fundos coloridos, antes do texto. Como no Excel, cobrem as linhas de
   // grade à direita e abaixo da célula.
   for (const cell of cells.values()) {
     if (!cell.style?.fill) continue;
     ctx.fillStyle = cell.style.fill;
-    ctx.fillRect(x(cell.col) + 1, y(cell.row) + 1, COL_WIDTH, ROW_HEIGHT);
+    ctx.fillRect(xOf(cell.col) + 1, yOf(cell.row) + 1, xOf(cell.col + 1) - xOf(cell.col), yOf(cell.row + 1) - yOf(cell.row));
   }
 
   // Conteúdo das células
@@ -130,32 +174,57 @@ function draw() {
   for (const cell of cells.values()) {
     if (cell.display === "") continue;
     const style = cell.style;
-    const left = x(cell.col);
-    const middle = y(cell.row) + ROW_HEIGHT / 2 + 1;
+    const left = xOf(cell.col);
+    const top = yOf(cell.row);
+    const cellWidth = xOf(cell.col + 1) - left;
+    const cellHeight = yOf(cell.row + 1) - top;
+    const middle = top + cellHeight / 2 + 1;
     const align = style?.align ?? (cell.kind === "number" ? "right" : cell.kind === "error" ? "center" : "left");
-    const anchor = align === "right" ? left + COL_WIDTH - 8 : align === "center" ? left + COL_WIDTH / 2 : left + 8;
+    const anchorX = align === "right" ? left + cellWidth - PADDING : align === "center" ? left + cellWidth / 2 : left + PADDING;
 
     ctx.save();
     ctx.font = `${style?.italic ? "italic " : ""}${style?.bold ? "700 " : ""}14px ${FONT}`;
     // Como no Excel, texto alinhado à esquerda invade as células vazias à direita.
-    let span = 1;
+    let clipWidth = cellWidth;
     if (cell.kind === "text" && align === "left") {
-      const needed = ctx.measureText(cell.display).width + 16;
-      while (needed > span * COL_WIDTH && !cells.get(key(cell.col + span, cell.row))?.display) span++;
+      const needed = ctx.measureText(cell.display).width + 2 * PADDING;
+      const lastCol = origin.col + colWidths.length - 1;
+      for (let next = cell.col + 1; needed > clipWidth && next <= lastCol; next++) {
+        if (cells.get(key(next, cell.row))?.display) break;
+        clipWidth = xOf(next + 1) - left;
+      }
     }
     ctx.beginPath();
-    ctx.rect(left + 1, y(cell.row) + 1, span * COL_WIDTH - 1, ROW_HEIGHT - 1);
+    ctx.rect(left + 1, top + 1, clipWidth - 1, cellHeight - 1);
     ctx.clip();
     ctx.fillStyle = style?.color ?? (cell.kind === "error" ? COLORS.error : COLORS.ink);
     ctx.textAlign = align;
-    ctx.fillText(cell.display, anchor, middle);
+    ctx.fillText(cell.display, anchorX, middle);
     if (style?.underline || style?.strike) {
       const textWidth = ctx.measureText(cell.display).width;
-      const start = align === "right" ? anchor - textWidth : align === "center" ? anchor - textWidth / 2 : anchor;
+      const start = align === "right" ? anchorX - textWidth : align === "center" ? anchorX - textWidth / 2 : anchorX;
       if (style.underline) ctx.fillRect(start, middle + 8, textWidth, 1);
       if (style.strike) ctx.fillRect(start, middle, textWidth, 1);
     }
     ctx.restore();
+  }
+
+  // Seleção: o intervalo fica tingido, menos a célula ativa.
+  const selLeft = xOf(range.col);
+  const selTop = yOf(range.row);
+  const selWidth = xOf(range.col + range.cols) - selLeft;
+  const selHeight = yOf(range.row + range.rows) - selTop;
+  if (selWidth > 0 && selHeight > 0) {
+    if (range.cols > 1 || range.rows > 1) {
+      ctx.fillStyle = COLORS.selection;
+      ctx.beginPath();
+      ctx.rect(selLeft, selTop, selWidth, selHeight);
+      ctx.rect(xOf(anchor.col), yOf(anchor.row), xOf(anchor.col + 1) - xOf(anchor.col), yOf(anchor.row + 1) - yOf(anchor.row));
+      ctx.fill("evenodd");
+    }
+    ctx.strokeStyle = COLORS.accent;
+    ctx.lineWidth = 2;
+    ctx.strokeRect(selLeft + 0.5, selTop + 0.5, selWidth, selHeight);
   }
 
   // Cabeçalhos, por cima das células
@@ -163,48 +232,47 @@ function draw() {
   ctx.fillRect(0, 0, width, HEADER_HEIGHT);
   ctx.fillRect(0, 0, HEADER_WIDTH, height);
   ctx.fillStyle = COLORS.headerActive;
-  ctx.fillRect(x(selection.col), 0, COL_WIDTH, HEADER_HEIGHT);
-  ctx.fillRect(0, y(selection.row), HEADER_WIDTH, ROW_HEIGHT);
+  ctx.fillRect(selLeft, 0, selWidth, HEADER_HEIGHT);
+  ctx.fillRect(0, selTop, HEADER_WIDTH, selHeight);
   ctx.fillStyle = COLORS.header;
   ctx.fillRect(0, 0, HEADER_WIDTH, HEADER_HEIGHT);
+  gridLines(HEADER_WIDTH, HEADER_HEIGHT);
 
-  ctx.strokeStyle = COLORS.line;
-  ctx.beginPath();
-  for (let c = origin.col; c <= origin.col + cols; c++) {
-    ctx.moveTo(x(c) + 0.5, 0);
-    ctx.lineTo(x(c) + 0.5, HEADER_HEIGHT);
-  }
-  for (let r = origin.row; r <= origin.row + rows; r++) {
-    ctx.moveTo(0, y(r) + 0.5);
-    ctx.lineTo(HEADER_WIDTH, y(r) + 0.5);
-  }
-  ctx.moveTo(0, HEADER_HEIGHT + 0.5);
-  ctx.lineTo(width, HEADER_HEIGHT + 0.5);
-  ctx.moveTo(HEADER_WIDTH + 0.5, 0);
-  ctx.lineTo(HEADER_WIDTH + 0.5, height);
-  ctx.stroke();
-
+  const inRange = (value: number, start: number, count: number) => value >= start && value < start + count;
   ctx.font = `13px ${FONT}`;
   ctx.textAlign = "center";
-  for (let c = origin.col; c < origin.col + cols && c < MAX_COLS; c++) {
-    ctx.fillStyle = c === selection.col ? COLORS.headerActiveInk : COLORS.muted;
-    ctx.fillText(colName(c), x(c) + COL_WIDTH / 2, HEADER_HEIGHT / 2);
-  }
-  for (let r = origin.row; r < origin.row + rows && r < MAX_ROWS; r++) {
-    ctx.fillStyle = r === selection.row ? COLORS.headerActiveInk : COLORS.muted;
-    ctx.fillText(String(r + 1), HEADER_WIDTH / 2, y(r) + ROW_HEIGHT / 2);
-  }
-
-  // Seleção
-  ctx.strokeStyle = COLORS.accent;
-  ctx.lineWidth = 2;
-  ctx.strokeRect(x(selection.col) + 0.5, y(selection.row) + 0.5, COL_WIDTH, ROW_HEIGHT);
+  colWidths.forEach((colWidth, index) => {
+    const col = origin.col + index;
+    ctx.fillStyle = inRange(col, range.col, range.cols) ? COLORS.headerActiveInk : COLORS.muted;
+    ctx.fillText(colName(col), colX[index] + colWidth / 2, HEADER_HEIGHT / 2);
+  });
+  rowHeights.forEach((rowHeight, index) => {
+    const row = origin.row + index;
+    ctx.fillStyle = inRange(row, range.row, range.rows) ? COLORS.headerActiveInk : COLORS.muted;
+    ctx.fillText(String(row + 1), HEADER_WIDTH / 2, rowY[index] + rowHeight / 2);
+  });
 }
 
-/** Mostra a célula selecionada na caixa de nome e na barra de fórmulas. */
+/** Mostra a seleção na caixa de nome e a célula ativa na barra de fórmulas. */
 function syncFormulaBar() {
-  nameBox.textContent = colName(selection.col) + (selection.row + 1);
-  fx.value = cells.get(key(selection.col, selection.row))?.input ?? "";
+  const { anchor, focus } = pos;
+  const single = anchor.col === focus.col && anchor.row === focus.row;
+  nameBox.textContent = single ? cellName(anchor) : `${cellName(anchor)}:${cellName(focus)}`;
+  if (!dirty) fx.value = cells.get(key(anchor.col, anchor.row))?.input ?? "";
+}
+
+/** Faz a barra de ferramentas refletir o estilo da célula ativa. */
+function syncToolbar() {
+  const style = cells.get(key(pos.anchor.col, pos.anchor.row))?.style;
+  for (const button of document.querySelectorAll<HTMLElement>("[data-toggle]")) {
+    const property = button.dataset.toggle as "bold" | "italic" | "underline" | "strike";
+    button.setAttribute("aria-pressed", String(style?.[property] ?? false));
+  }
+  for (const button of document.querySelectorAll<HTMLElement>("[data-align]")) {
+    button.setAttribute("aria-pressed", String(style?.align === button.dataset.align));
+  }
+  textColor.value = style?.color?.toLowerCase() ?? COLORS.ink;
+  fillColor.value = style?.fill?.toLowerCase() ?? "#ffffff";
 }
 
 /** Atualiza o nome do arquivo e o estado de gravação no cabeçalho. */
@@ -218,35 +286,61 @@ function markModified() {
   syncDocument();
 }
 
-/** Busca no motor as células da janela visível e redesenha. */
+/** Busca no motor o que cabe na tela e redesenha. */
 async function refresh() {
   try {
-    const { cols, rows } = visibleSize();
-    const view = await engine.view(sheet, origin.col, origin.row, cols, rows);
-    cells = new Map(view.map((cell) => [key(cell.col, cell.row), cell]));
+    const width = Math.max(1, wrap.clientWidth - HEADER_WIDTH);
+    const height = Math.max(1, wrap.clientHeight - HEADER_HEIGHT);
+    const view = await engine.view(sheet, pos.origin.col, pos.origin.row, width, height);
+    colWidths = view.colWidths;
+    rowHeights = view.rowHeights;
+    colX = edges(colWidths, HEADER_WIDTH);
+    rowY = edges(rowHeights, HEADER_HEIGHT);
+    cells = new Map(view.cells.map((cell) => [key(cell.col, cell.row), cell]));
   } catch (error) {
     statusEl.textContent = `Erro ao ler a planilha: ${error}`;
   }
   draw();
   syncFormulaBar();
+  syncToolbar();
 }
 
-async function select(col: number, row: number) {
-  selection.col = clamp(col, MAX_COLS - 1);
-  selection.row = clamp(row, MAX_ROWS - 1);
-  scrollToSelection();
+/** Rola o mínimo necessário para o foco da seleção ficar inteiro na tela. */
+async function reveal() {
+  const { focus, origin } = pos;
+  origin.col = Math.min(origin.col, focus.col);
+  origin.row = Math.min(origin.row, focus.row);
   await refresh();
+  // As larguras variam, então avança uma coluna ou linha por vez e confere.
+  for (let guard = 0; guard < 1000; guard++) {
+    const colIndex = focus.col - origin.col;
+    const rowIndex = focus.row - origin.row;
+    const colCut = colIndex > 0 && (colIndex >= colWidths.length || colX[colIndex + 1] > wrap.clientWidth);
+    const rowCut = rowIndex > 0 && (rowIndex >= rowHeights.length || rowY[rowIndex + 1] > wrap.clientHeight);
+    if (!colCut && !rowCut) break;
+    if (colCut) origin.col++;
+    if (rowCut) origin.row++;
+    await refresh();
+  }
 }
 
-/** Grava o texto da barra de fórmulas na célula selecionada. */
+/** Move o foco da seleção; sem `extend`, a seleção vira essa única célula. */
+async function select(cell: Cell, extend = false) {
+  pos.focus = { col: clamp(cell.col, MAX_COLS - 1), row: clamp(cell.row, MAX_ROWS - 1) };
+  if (!extend) pos.anchor = { ...pos.focus };
+  await reveal();
+}
+
+/** Grava o texto da barra de fórmulas na célula ativa. */
 async function write(): Promise<boolean> {
-  const current = cells.get(key(selection.col, selection.row))?.input ?? "";
-  if (fx.value === current) {
+  const { anchor } = pos;
+  const current = cells.get(key(anchor.col, anchor.row))?.input ?? "";
+  if (!dirty || fx.value === current) {
     dirty = false;
     return true;
   }
   try {
-    await engine.setCell(sheet, selection.col, selection.row, fx.value);
+    await engine.setCell(sheet, anchor.col, anchor.row, fx.value);
     dirty = false;
     statusEl.textContent = "Pronto";
     markModified();
@@ -257,11 +351,43 @@ async function write(): Promise<boolean> {
   }
 }
 
-/** Grava a edição e move a seleção. */
+/** Grava a edição e move a célula ativa. */
 async function commit(moveCols: number, moveRows: number) {
   if (!(await write())) return;
   canvas.focus();
-  await select(selection.col + moveCols, selection.row + moveRows);
+  await select({ col: pos.anchor.col + moveCols, row: pos.anchor.row + moveRows });
+}
+
+/** Aplica uma propriedade de estilo à seleção. */
+async function format(property: StyleProperty, value: string) {
+  if (!(await write())) return;
+  try {
+    await engine.format(sheet, selectedRange(), property, value);
+    statusEl.textContent = "Pronto";
+    markModified();
+  } catch (error) {
+    statusEl.textContent = `Erro ao formatar: ${error}`;
+  }
+  canvas.focus();
+  await refresh();
+}
+
+/** Liga ou desliga negrito, itálico, sublinhado ou tachado, a partir da célula ativa. */
+function toggle(property: "bold" | "italic" | "underline" | "strike") {
+  const current = cells.get(key(pos.anchor.col, pos.anchor.row))?.style?.[property] ?? false;
+  return format(property, String(!current));
+}
+
+/** Apaga o conteúdo da seleção. */
+async function clearSelection() {
+  dirty = false;
+  try {
+    await engine.clearCells(sheet, selectedRange());
+    markModified();
+  } catch (error) {
+    statusEl.textContent = `Erro ao apagar: ${error}`;
+  }
+  await refresh();
 }
 
 /** Desfaz ou refaz a última edição e redesenha. */
@@ -303,24 +429,24 @@ async function loadSheets() {
   }
   if (!sheets.some((info) => info.index === sheet) && sheets.length > 0) {
     sheet = sheets[0].index;
-    ({ selection, origin } = positions.get(sheet) ?? newPosition());
+    pos = positions.get(sheet) ?? newPosition();
   }
   renderTabs();
 }
 
 /** Troca a planilha na tela, guardando a posição da anterior. */
 async function showSheet(index: number) {
-  if (dirty && !(await write())) return;
-  positions.set(sheet, { selection, origin });
+  if (!(await write())) return;
+  positions.set(sheet, pos);
   sheet = index;
-  ({ selection, origin } = positions.get(index) ?? newPosition());
+  pos = positions.get(index) ?? newPosition();
   renderTabs();
   canvas.focus();
   await refresh();
 }
 
 async function addSheet() {
-  if (dirty && !(await write())) return;
+  if (!(await write())) return;
   try {
     const index = await engine.addSheet();
     markModified();
@@ -334,7 +460,7 @@ async function addSheet() {
 async function openFile() {
   const files = engine.files;
   if (!files) return;
-  if (dirty && !(await write())) return;
+  if (!(await write())) return;
   try {
     if (modified && !(await files.confirmDiscard())) return;
     const path = await files.open();
@@ -343,7 +469,7 @@ async function openFile() {
     modified = false;
     positions = new Map();
     sheet = 0;
-    ({ selection, origin } = newPosition());
+    pos = newPosition();
     statusEl.textContent = "Pronto";
     syncDocument();
     await loadSheets();
@@ -357,7 +483,7 @@ async function openFile() {
 async function saveFile(askWhere: boolean) {
   const files = engine.files;
   if (!files) return;
-  if (dirty && !(await write())) return;
+  if (!(await write())) return;
   try {
     const path = await files.save(askWhere ? null : filePath);
     if (path === null) return;
@@ -371,19 +497,40 @@ async function saveFile(askWhere: boolean) {
   canvas.focus();
 }
 
-canvas.addEventListener("mousedown", (event) => {
+/** Posição de um evento do mouse dentro do canvas. */
+function pointerCell(event: PointerEvent): Cell {
   const bounds = canvas.getBoundingClientRect();
-  const px = event.clientX - bounds.left;
-  const py = event.clientY - bounds.top;
-  if (px < HEADER_WIDTH || py < HEADER_HEIGHT) return;
-  const col = origin.col + Math.floor((px - HEADER_WIDTH) / COL_WIDTH);
-  const row = origin.row + Math.floor((py - HEADER_HEIGHT) / ROW_HEIGHT);
+  return cellAt(event.clientX - bounds.left, event.clientY - bounds.top);
+}
+
+canvas.addEventListener("pointerdown", (event) => {
+  if (event.button !== 0) return;
+  const bounds = canvas.getBoundingClientRect();
+  if (event.clientX - bounds.left < HEADER_WIDTH || event.clientY - bounds.top < HEADER_HEIGHT) return;
+  const cell = pointerCell(event);
+  dragging = true;
+  canvas.setPointerCapture(event.pointerId);
   // Clicar em outra célula no meio de uma edição grava a edição, como no Excel.
   void (async () => {
-    if (dirty && !(await write())) return;
-    await select(col, row);
+    if (!(await write())) return;
+    await select(cell, event.shiftKey);
   })();
 });
+
+canvas.addEventListener("pointermove", (event) => {
+  if (!dragging) return;
+  const cell = pointerCell(event);
+  if (cell.col === pos.focus.col && cell.row === pos.focus.row) return;
+  pos.focus = cell;
+  draw();
+  syncFormulaBar();
+});
+
+const endDrag = () => {
+  dragging = false;
+};
+canvas.addEventListener("pointerup", endDrag);
+canvas.addEventListener("pointercancel", endDrag);
 
 canvas.addEventListener(
   "wheel",
@@ -392,6 +539,7 @@ canvas.addEventListener(
     const horizontal = event.shiftKey || Math.abs(event.deltaX) > Math.abs(event.deltaY);
     const delta = horizontal ? event.deltaX || event.deltaY : event.deltaY;
     if (delta === 0) return;
+    const { origin } = pos;
     if (horizontal) {
       origin.col = clamp(origin.col + Math.sign(delta), MAX_COLS - 1);
     } else {
@@ -408,27 +556,36 @@ canvas.addEventListener("keydown", (event) => {
     ArrowRight: [1, 0],
     ArrowUp: [0, -1],
     ArrowDown: [0, 1],
-    Tab: [event.shiftKey ? -1 : 1, 0],
   };
   const move = moves[event.key];
   const shortcut = event.ctrlKey || event.metaKey;
-  if (shortcut && event.key.toLowerCase() === "z") {
+  const letter = event.key.toLowerCase();
+  const toggles: Record<string, "bold" | "italic" | "underline"> = { b: "bold", i: "italic", u: "underline" };
+
+  if (shortcut && letter === "z") {
     event.preventDefault();
     void history(event.shiftKey ? "redo" : "undo");
-  } else if (shortcut && event.key.toLowerCase() === "y") {
+  } else if (shortcut && letter === "y") {
     event.preventDefault();
     void history("redo");
+  } else if (shortcut && toggles[letter] && engine.formatting) {
+    event.preventDefault();
+    void toggle(toggles[letter]);
   } else if (move) {
     event.preventDefault();
-    void select(selection.col + move[0], selection.row + move[1]);
+    // Com Shift a seleção cresce a partir do foco; sem ele, anda a célula ativa.
+    const from = event.shiftKey ? pos.focus : pos.anchor;
+    void select({ col: from.col + move[0], row: from.row + move[1] }, event.shiftKey);
+  } else if (event.key === "Tab") {
+    event.preventDefault();
+    void select({ col: pos.anchor.col + (event.shiftKey ? -1 : 1), row: pos.anchor.row });
   } else if (event.key === "Enter" || event.key === "F2") {
     event.preventDefault();
     fx.focus();
   } else if (event.key === "Delete" || event.key === "Backspace") {
     event.preventDefault();
-    fx.value = "";
-    void commit(0, 0);
-  } else if (event.key.length === 1 && !event.ctrlKey && !event.metaKey && !event.altKey) {
+    void clearSelection();
+  } else if (event.key.length === 1 && !shortcut && !event.altKey) {
     // Digitar sobre a célula começa uma edição nova, como no Excel.
     event.preventDefault();
     fx.value = event.key;
@@ -469,11 +626,30 @@ window.addEventListener("keydown", (event) => {
   }
 });
 
+for (const button of document.querySelectorAll<HTMLElement>("[data-toggle]")) {
+  button.addEventListener("click", () => void toggle(button.dataset.toggle as "bold" | "italic" | "underline" | "strike"));
+}
+for (const button of document.querySelectorAll<HTMLElement>("[data-align]")) {
+  // Clicar no alinhamento já ativo volta ao automático.
+  button.addEventListener("click", () => {
+    const active = button.getAttribute("aria-pressed") === "true";
+    void format("align", active ? "general" : button.dataset.align!);
+  });
+}
+for (const button of document.querySelectorAll<HTMLElement>("[data-format]")) {
+  button.addEventListener("click", () => void format("format", button.dataset.format!));
+}
+// `change` dispara uma vez, ao fechar o seletor; `input` dispararia a cada movimento.
+textColor.addEventListener("change", () => void format("color", textColor.value));
+fillColor.addEventListener("change", () => void format("fill", fillColor.value));
+$("#no-fill").addEventListener("click", () => void format("fill", ""));
+
 $("#open-btn").addEventListener("click", () => void openFile());
 $("#save-btn").addEventListener("click", () => void saveFile(false));
 $("#save-as-btn").addEventListener("click", () => void saveFile(true));
 $("#add-sheet").addEventListener("click", () => void addSheet());
 $("#file-actions").hidden = engine.files === null;
+$("#toolbar").hidden = !engine.formatting;
 
 new ResizeObserver(() => void refresh()).observe(wrap);
 

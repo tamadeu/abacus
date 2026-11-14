@@ -22,6 +22,38 @@
       </div>
     </header>
 
+    <div class="toolbar" id="toolbar" role="toolbar" aria-label="Formatação">
+      <button type="button" data-toggle="bold" aria-label="Negrito" title="Negrito (Ctrl+B)"><b>N</b></button>
+      <button type="button" data-toggle="italic" aria-label="Itálico" title="Itálico (Ctrl+I)"><i>I</i></button>
+      <button type="button" data-toggle="underline" aria-label="Sublinhado" title="Sublinhado (Ctrl+U)"><u>S</u></button>
+      <button type="button" data-toggle="strike" aria-label="Tachado" title="Tachado"><s>ab</s></button>
+      <span class="separator" aria-hidden="true"></span>
+      <label class="swatch" title="Cor do texto">
+        Texto
+        <input type="color" id="text-color" aria-label="Cor do texto" />
+      </label>
+      <label class="swatch" title="Cor de fundo">
+        Fundo
+        <input type="color" id="fill-color" aria-label="Cor de fundo" />
+      </label>
+      <button type="button" id="no-fill">Sem fundo</button>
+      <span class="separator" aria-hidden="true"></span>
+      <button type="button" data-align="left" aria-label="Alinhar à esquerda" title="Alinhar à esquerda">
+        <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 6h16M4 12h10M4 18h14" /></svg>
+      </button>
+      <button type="button" data-align="center" aria-label="Centralizar" title="Centralizar">
+        <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 6h16M7 12h10M5 18h14" /></svg>
+      </button>
+      <button type="button" data-align="right" aria-label="Alinhar à direita" title="Alinhar à direita">
+        <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 6h16M10 12h10M6 18h14" /></svg>
+      </button>
+      <span class="separator" aria-hidden="true"></span>
+      <button type="button" data-format="general" title="Formato geral">Geral</button>
+      <button type="button" data-format="#,##0.00" title="Número com duas casas">0,00</button>
+      <button type="button" data-format='"R$" #,##0.00' title="Moeda">R$</button>
+      <button type="button" data-format="0.00%" title="Porcentagem">%</button>
+    </div>
+
     <div class="formula-bar">
       <div id="name-box" aria-label="Célula selecionada">A1</div>
       <label for="fx">fx</label>

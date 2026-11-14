@@ -57,6 +57,55 @@ body {
   color: var(--muted);
 }
 
+.toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 16px 0;
+}
+
+.toolbar button {
+  display: grid;
+  place-items: center;
+  min-width: 32px;
+  height: 32px;
+  padding: 0 8px;
+}
+
+.toolbar button[aria-pressed="true"] {
+  border-color: #c9c6f2;
+  background: #e7e5fb;
+  color: #3730a3;
+}
+
+.separator {
+  width: 1px;
+  height: 20px;
+  margin: 0 4px;
+  background: var(--line);
+}
+
+.swatch {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.swatch input {
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: none;
+  background: none;
+  cursor: pointer;
+}
+
 .formula-bar {
   display: flex;
   align-items: center;

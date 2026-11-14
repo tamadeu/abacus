@@ -6,7 +6,7 @@ mod engine;
 use std::path::PathBuf;
 use std::sync::Mutex;
 
-use engine::{CellView, Engine, SheetInfo};
+use engine::{Engine, Range, SheetInfo, StyleProperty, View};
 use tauri::State;
 
 /// Pasta de trabalho aberta na janela.
@@ -34,17 +34,36 @@ fn set_cell(state: State<'_, AppState>, sheet: u32, col: u32, row: u32, input: S
     state.with(|engine| engine.set_cell(sheet, col, row, &input))
 }
 
-/// Devolve as células com conteúdo ou estilo dentro da janela visível.
+/// Devolve o que cabe numa tela de `width` por `height` pixels a partir da
+/// célula dada.
 #[tauri::command]
 fn get_view(
     state: State<'_, AppState>,
     sheet: u32,
     first_col: u32,
     first_row: u32,
-    cols: u32,
-    rows: u32,
-) -> Result<Vec<CellView>, String> {
-    state.with(|engine| engine.view(sheet, first_col, first_row, cols, rows))
+    width: f64,
+    height: f64,
+) -> Result<View, String> {
+    state.with(|engine| engine.view(sheet, first_col, first_row, width, height))
+}
+
+/// Altera uma propriedade de estilo nas células do intervalo.
+#[tauri::command]
+fn format_cells(
+    state: State<'_, AppState>,
+    sheet: u32,
+    range: Range,
+    property: StyleProperty,
+    value: String,
+) -> Result<(), String> {
+    state.with(|engine| engine.format(sheet, range, property, &value))
+}
+
+/// Apaga o conteúdo das células do intervalo, mantendo o estilo.
+#[tauri::command]
+fn clear_cells(state: State<'_, AppState>, sheet: u32, range: Range) -> Result<(), String> {
+    state.with(|engine| engine.clear(sheet, range))
 }
 
 #[tauri::command]
@@ -93,7 +112,16 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .manage(AppState { engine: Mutex::new(engine) })
         .invoke_handler(tauri::generate_handler![
-            set_cell, get_view, get_sheets, add_sheet, undo, redo, open_file, save_file
+            set_cell,
+            get_view,
+            format_cells,
+            clear_cells,
+            get_sheets,
+            add_sheet,
+            undo,
+            redo,
+            open_file,
+            save_file
         ])
         .run(tauri::generate_context!())
         .expect("erro ao iniciar o Ábaco");

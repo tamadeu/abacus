@@ -28,6 +28,32 @@ export interface CellView {
   style?: CellStyle;
 }
 
+/** O pedaço de uma planilha que cabe na tela. */
+export interface View {
+  /** Largura, em pixels, de cada coluna visível a partir da primeira. */
+  colWidths: number[];
+  /** Altura, em pixels, de cada linha visível a partir da primeira. */
+  rowHeights: number[];
+  /** Células com conteúdo ou estilo, já calculadas. */
+  cells: CellView[];
+}
+
+/** Um retângulo de células, com coluna e linha iniciais a partir de zero. */
+export interface Range {
+  col: number;
+  row: number;
+  cols: number;
+  rows: number;
+}
+
+/**
+ * Propriedades de estilo que a interface pode alterar. `bold`, `italic`,
+ * `underline` e `strike` recebem `"true"` ou `"false"`; `color` e `fill`,
+ * uma cor `#RRGGBB` ou vazio para remover; `align`, `"left"`, `"center"`,
+ * `"right"` ou `"general"`; `format`, um formato numérico do Excel.
+ */
+export type StyleProperty = "bold" | "italic" | "underline" | "strike" | "color" | "fill" | "align" | "format";
+
 /** Uma planilha visível da pasta de trabalho. */
 export interface SheetInfo {
   /** Índice usado nas demais chamadas. */
@@ -55,12 +81,18 @@ export interface Engine {
   readonly notice: string | null;
   /** `null` quando a casca não tem acesso a arquivos. */
   readonly files: FileAccess | null;
+  /** Se `format` tem efeito. */
+  readonly formatting: boolean;
   sheets(): Promise<SheetInfo[]>;
   /** Cria uma planilha vazia e devolve o índice dela. */
   addSheet(): Promise<number>;
   setCell(sheet: number, col: number, row: number, input: string): Promise<void>;
-  /** Células com conteúdo ou estilo dentro da janela visível, já calculadas. */
-  view(sheet: number, firstCol: number, firstRow: number, cols: number, rows: number): Promise<CellView[]>;
+  /** O que cabe numa tela de `width` por `height` pixels a partir da célula dada. */
+  view(sheet: number, firstCol: number, firstRow: number, width: number, height: number): Promise<View>;
+  /** Altera uma propriedade de estilo nas células do intervalo. */
+  format(sheet: number, range: Range, property: StyleProperty, value: string): Promise<void>;
+  /** Apaga o conteúdo das células do intervalo, mantendo o estilo. */
+  clearCells(sheet: number, range: Range): Promise<void>;
   undo(): Promise<void>;
   redo(): Promise<void>;
 }
@@ -70,6 +102,7 @@ const XLSX_FILTER = [{ name: "Pasta de trabalho do Excel", extensions: ["xlsx"] 
 /** Motor IronCalc, em Rust, chamado pelos comandos do Tauri. */
 class TauriEngine implements Engine {
   readonly notice = null;
+  readonly formatting = true;
 
   readonly files: FileAccess = {
     async open() {
@@ -107,8 +140,16 @@ class TauriEngine implements Engine {
     return invoke("set_cell", { sheet, col, row, input });
   }
 
-  view(sheet: number, firstCol: number, firstRow: number, cols: number, rows: number): Promise<CellView[]> {
-    return invoke("get_view", { sheet, firstCol, firstRow, cols, rows });
+  view(sheet: number, firstCol: number, firstRow: number, width: number, height: number): Promise<View> {
+    return invoke("get_view", { sheet, firstCol, firstRow, width, height });
+  }
+
+  format(sheet: number, range: Range, property: StyleProperty, value: string): Promise<void> {
+    return invoke("format_cells", { sheet, range, property, value });
+  }
+
+  clearCells(sheet: number, range: Range): Promise<void> {
+    return invoke("clear_cells", { sheet, range });
   }
 
   undo(): Promise<void> {
@@ -123,11 +164,12 @@ class TauriEngine implements Engine {
 /**
  * Substituto usado quando a interface roda no navegador (`npm run dev`),
  * fora do Tauri. Guarda o que foi digitado, mas não calcula fórmulas, não
- * desfaz edições e não abre nem salva arquivos.
+ * formata, não desfaz edições e não abre nem salva arquivos.
  */
 class PreviewEngine implements Engine {
   readonly notice = "Pré-visualização no navegador (sem motor de cálculo)";
   readonly files = null;
+  readonly formatting = false;
   private names = ["Sheet1"];
   private cells = new Map<string, CellView>();
 
@@ -150,12 +192,33 @@ class PreviewEngine implements Engine {
     this.cells.set(key, { col, row, input, display: input, kind: isNumber ? "number" : "text" });
   }
 
-  async view(sheet: number, firstCol: number, firstRow: number, cols: number, rows: number): Promise<CellView[]> {
-    const inWindow = (c: CellView) =>
-      c.col >= firstCol && c.col < firstCol + cols && c.row >= firstRow && c.row < firstRow + rows;
-    return [...this.cells]
-      .filter(([key, cell]) => key.startsWith(`${sheet}:`) && inWindow(cell))
-      .map(([, cell]) => cell);
+  async view(sheet: number, firstCol: number, firstRow: number, width: number, height: number): Promise<View> {
+    // Mesmos tamanhos padrão do IronCalc.
+    const cols = Math.ceil(width / 90);
+    const rows = Math.ceil(height / 25);
+    const range = { col: firstCol, row: firstRow, cols, rows };
+    return {
+      colWidths: new Array<number>(cols).fill(90),
+      rowHeights: new Array<number>(rows).fill(25),
+      cells: this.inRange(sheet, range).map(([, cell]) => cell),
+    };
+  }
+
+  async format(): Promise<void> {}
+
+  async clearCells(sheet: number, range: Range): Promise<void> {
+    for (const [key] of this.inRange(sheet, range)) this.cells.delete(key);
+  }
+
+  private inRange(sheet: number, range: Range): [string, CellView][] {
+    return [...this.cells].filter(
+      ([key, cell]) =>
+        key.startsWith(`${sheet}:`) &&
+        cell.col >= range.col &&
+        cell.col < range.col + range.cols &&
+        cell.row >= range.row &&
+        cell.row < range.row + range.rows,
+    );
   }
 
   async undo(): Promise<void> {}

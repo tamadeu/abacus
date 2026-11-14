@@ -9,10 +9,11 @@ use std::io::Cursor;
 use std::path::{Path, PathBuf};
 
 use ironcalc::base::UserModel;
+use ironcalc::base::expressions::types::Area;
 use ironcalc::base::types::{CellType, HorizontalAlignment, Style};
 use ironcalc::export::save_xlsx_to_writer;
 use ironcalc::import::load_from_xlsx;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 /// Localidade dos números e datas.
 ///
@@ -24,6 +25,66 @@ const LOCALE: &str = "es";
 /// português ainda, então fica em inglês.
 const LANGUAGE: &str = "en";
 const TIMEZONE: &str = "America/Sao_Paulo";
+/// Limites de quantas colunas e linhas uma única tela pode pedir, para o
+/// caso de muitas delas estarem ocultas (largura ou altura zero).
+const MAX_VIEW_COLS: usize = 500;
+const MAX_VIEW_ROWS: usize = 2000;
+
+/// O pedaço de uma planilha que cabe na tela.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct View {
+    /// Largura, em pixels, de cada coluna visível a partir da primeira.
+    pub col_widths: Vec<f64>,
+    /// Altura, em pixels, de cada linha visível a partir da primeira.
+    pub row_heights: Vec<f64>,
+    /// Células com conteúdo ou estilo, já calculadas.
+    pub cells: Vec<CellView>,
+}
+
+/// Um retângulo de células, com coluna e linha iniciais a partir de zero.
+#[derive(Debug, Clone, Copy, Deserialize)]
+pub struct Range {
+    pub col: u32,
+    pub row: u32,
+    pub cols: u32,
+    pub rows: u32,
+}
+
+/// Propriedades de estilo que a interface pode alterar.
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum StyleProperty {
+    /// `"true"` ou `"false"`.
+    Bold,
+    Italic,
+    Underline,
+    Strike,
+    /// Cor do texto, como `#RRGGBB`; vazio volta à cor padrão.
+    Color,
+    /// Cor de fundo, como `#RRGGBB`; vazio remove o fundo.
+    Fill,
+    /// `"left"`, `"center"`, `"right"` ou `"general"`.
+    Align,
+    /// Formato numérico do Excel, como `0.00%`.
+    Format,
+}
+
+impl StyleProperty {
+    /// Caminho da propriedade no estilo do IronCalc.
+    fn path(self) -> &'static str {
+        match self {
+            StyleProperty::Bold => "font.b",
+            StyleProperty::Italic => "font.i",
+            StyleProperty::Underline => "font.u",
+            StyleProperty::Strike => "font.strike",
+            StyleProperty::Color => "font.color",
+            StyleProperty::Fill => "fill.color",
+            StyleProperty::Align => "alignment.horizontal",
+            StyleProperty::Format => "num_fmt",
+        }
+    }
+}
 
 /// O que a interface precisa saber para desenhar uma célula.
 #[derive(Debug, Serialize)]
@@ -142,22 +203,19 @@ impl Engine {
         self.model.set_user_input(sheet, row, col, input)
     }
 
-    /// Células com conteúdo ou estilo dentro da janela visível, já calculadas.
-    pub fn view(
-        &self,
-        sheet: u32,
-        first_col: u32,
-        first_row: u32,
-        cols: u32,
-        rows: u32,
-    ) -> Result<Vec<CellView>, String> {
-        // Só percorre a parte da janela que tem dados.
-        let used = self.model.get_model().workbook.worksheet(sheet)?.dimension();
+    /// O que cabe numa tela de `width` por `height` pixels a partir da
+    /// célula dada: tamanhos de colunas e linhas e as células preenchidas.
+    pub fn view(&self, sheet: u32, first_col: u32, first_row: u32, width: f64, height: f64) -> Result<View, String> {
         let (top, left) = to_ironcalc(first_col, first_row)?;
-        let bottom = top.saturating_add(to_i32(rows)?).saturating_sub(1).min(used.max_row);
-        let right = left.saturating_add(to_i32(cols)?).saturating_sub(1).min(used.max_column);
+        let col_widths = sizes(left, MAX_COLS, MAX_VIEW_COLS, width, |col| self.model.get_column_width(sheet, col))?;
+        let row_heights = sizes(top, MAX_ROWS, MAX_VIEW_ROWS, height, |row| self.model.get_row_height(sheet, row))?;
 
-        let mut view = Vec::new();
+        // Só percorre a parte da tela que tem dados.
+        let used = self.model.get_model().workbook.worksheet(sheet)?.dimension();
+        let bottom = (top + row_heights.len() as i32 - 1).min(used.max_row);
+        let right = (left + col_widths.len() as i32 - 1).min(used.max_column);
+
+        let mut cells = Vec::new();
         for row in top.max(used.min_row)..=bottom {
             for col in left.max(used.min_column)..=right {
                 let input = self.model.get_cell_content(sheet, row, col)?;
@@ -171,10 +229,20 @@ impl Engine {
                     CellType::ErrorValue => CellKind::Error,
                     _ => CellKind::Text,
                 };
-                view.push(CellView { col: (col - 1) as u32, row: (row - 1) as u32, input, display, kind, style });
+                cells.push(CellView { col: (col - 1) as u32, row: (row - 1) as u32, input, display, kind, style });
             }
         }
-        Ok(view)
+        Ok(View { col_widths, row_heights, cells })
+    }
+
+    /// Altera uma propriedade de estilo em todas as células do retângulo.
+    pub fn format(&mut self, sheet: u32, range: Range, property: StyleProperty, value: &str) -> Result<(), String> {
+        self.model.update_range_style(&area(sheet, range)?, property.path(), value)
+    }
+
+    /// Apaga o conteúdo das células do retângulo, mantendo o estilo.
+    pub fn clear(&mut self, sheet: u32, range: Range) -> Result<(), String> {
+        self.model.range_clear_contents(&area(sheet, range)?)
     }
 
     /// Reduz o estilo do IronCalc ao que a grade desenha. `None` se for o padrão.
@@ -209,6 +277,45 @@ impl Engine {
     }
 }
 
+/// Colunas e linhas de uma planilha, iguais às do Excel.
+const MAX_COLS: i32 = 16_384;
+const MAX_ROWS: i32 = 1_048_576;
+
+/// Tamanhos de colunas (ou linhas) a partir de `first`, até cobrir `extent`
+/// pixels, chegar ao fim da planilha ou atingir `limit` itens.
+fn sizes(
+    first: i32,
+    last: i32,
+    limit: usize,
+    extent: f64,
+    size_of: impl Fn(i32) -> Result<f64, String>,
+) -> Result<Vec<f64>, String> {
+    let mut sizes = Vec::new();
+    let mut covered = 0.0;
+    for index in first..=last {
+        let size = size_of(index)?;
+        sizes.push(size);
+        covered += size;
+        if covered >= extent || sizes.len() >= limit {
+            break;
+        }
+    }
+    Ok(sizes)
+}
+
+/// Converte um retângulo da interface para a área do IronCalc.
+fn area(sheet: u32, range: Range) -> Result<Area, String> {
+    if range.cols == 0 || range.rows == 0 {
+        return Err("o intervalo está vazio".into());
+    }
+    let (row, column) = to_ironcalc(range.col, range.row)?;
+    let (width, height) = (to_i32(range.cols)?, to_i32(range.rows)?);
+    if column.saturating_add(width - 1) > MAX_COLS || row.saturating_add(height - 1) > MAX_ROWS {
+        return Err("o intervalo passa do fim da planilha".into());
+    }
+    Ok(Area { sheet, row, column, width, height })
+}
+
 fn to_i32(value: u32) -> Result<i32, String> {
     i32::try_from(value).map_err(|_| format!("valor fora da planilha: {value}"))
 }
@@ -220,8 +327,6 @@ fn to_ironcalc(col: u32, row: u32) -> Result<(i32, i32), String> {
 
 #[cfg(test)]
 mod tests {
-    use ironcalc::base::expressions::types::Area;
-
     use super::*;
 
     /// Preenche células da primeira planilha, dadas como (coluna, linha,
@@ -235,7 +340,7 @@ mod tests {
     }
 
     fn cell_in(engine: &Engine, sheet: u32, col: u32, row: u32) -> Option<CellView> {
-        engine.view(sheet, col, row, 1, 1).unwrap().pop()
+        engine.view(sheet, col, row, 1.0, 1.0).unwrap().cells.pop()
     }
 
     fn cell(engine: &Engine, col: u32, row: u32) -> Option<CellView> {
@@ -247,9 +352,8 @@ mod tests {
     }
 
     /// Aplica um estilo a uma célula da primeira planilha.
-    fn set_style(engine: &mut Engine, col: u32, row: u32, path: &str, value: &str) {
-        let area = Area { sheet: 0, row: row as i32 + 1, column: col as i32 + 1, width: 1, height: 1 };
-        engine.model.update_range_style(&area, path, value).unwrap();
+    fn set_style(engine: &mut Engine, col: u32, row: u32, property: StyleProperty, value: &str) {
+        engine.format(0, Range { col, row, cols: 1, rows: 1 }, property, value).unwrap();
     }
 
     /// Caminho de arquivo temporário exclusivo deste teste.
@@ -292,11 +396,16 @@ mod tests {
     #[test]
     fn view_returns_only_cells_inside_the_window() {
         let e = engine(&[(0, 0, "1"), (5, 5, "2"), (20, 40, "3")]);
-        let positions = |view: Vec<CellView>| view.into_iter().map(|c| (c.col, c.row)).collect::<Vec<_>>();
-        assert_eq!(positions(e.view(0, 0, 0, 10, 10).unwrap()), [(0, 0), (5, 5)]);
-        assert_eq!(positions(e.view(0, 5, 5, 30, 40).unwrap()), [(5, 5), (20, 40)]);
-        assert_eq!(positions(e.view(0, 6, 6, 5, 5).unwrap()), []);
-        assert_eq!(positions(e.view(0, 100, 100, 10, 10).unwrap()), []);
+        // Com os tamanhos padrão (90 x 25 pixels), 900 x 250 são 10 colunas e 10 linhas.
+        let positions = |first_col, first_row, cols: f64, rows: f64| {
+            let view = e.view(0, first_col, first_row, cols * 90.0, rows * 25.0).unwrap();
+            assert_eq!((view.col_widths.len(), view.row_heights.len()), (cols as usize, rows as usize));
+            view.cells.into_iter().map(|c| (c.col, c.row)).collect::<Vec<_>>()
+        };
+        assert_eq!(positions(0, 0, 10.0, 10.0), [(0, 0), (5, 5)]);
+        assert_eq!(positions(5, 5, 30.0, 40.0), [(5, 5), (20, 40)]);
+        assert_eq!(positions(6, 6, 5.0, 5.0), []);
+        assert_eq!(positions(100, 100, 10.0, 10.0), []);
     }
 
     #[test]
@@ -337,7 +446,7 @@ mod tests {
         assert!(e.set_cell(0, 0, 1_048_576, "1").is_err());
         assert!(e.set_cell(0, 16_383, 1_048_575, "1").is_ok());
         assert!(e.set_cell(7, 0, 0, "1").is_err());
-        assert!(e.view(7, 0, 0, 10, 10).is_err());
+        assert!(e.view(7, 0, 0, 900.0, 250.0).is_err());
     }
 
     #[test]
@@ -360,12 +469,12 @@ mod tests {
     #[test]
     fn view_reports_styles() {
         let mut e = engine(&[(0, 0, "Total"), (1, 0, "5")]);
-        set_style(&mut e, 0, 0, "font.b", "true");
-        set_style(&mut e, 0, 0, "font.color", "#0F6B30");
-        set_style(&mut e, 0, 0, "fill.color", "#E3F4E6");
-        set_style(&mut e, 0, 0, "alignment.horizontal", "center");
+        set_style(&mut e, 0, 0, StyleProperty::Bold, "true");
+        set_style(&mut e, 0, 0, StyleProperty::Color, "#0F6B30");
+        set_style(&mut e, 0, 0, StyleProperty::Fill, "#E3F4E6");
+        set_style(&mut e, 0, 0, StyleProperty::Align, "center");
         // Célula vazia, só com cor de fundo.
-        set_style(&mut e, 3, 3, "fill.color", "#E7E5FB");
+        set_style(&mut e, 3, 3, StyleProperty::Fill, "#E7E5FB");
 
         let total = cell(&e, 0, 0).unwrap().style.unwrap();
         assert!(total.bold && !total.italic);
@@ -381,11 +490,71 @@ mod tests {
     }
 
     #[test]
+    fn view_reports_column_and_row_sizes() {
+        let mut e = Engine::new().unwrap();
+        e.model.set_columns_width(0, 2, 2, 200.0).unwrap();
+        e.model.set_rows_height(0, 1, 1, 60.0).unwrap();
+
+        let view = e.view(0, 0, 0, 300.0, 100.0).unwrap();
+        // 90 + 200 + 90 cobrem 300 pixels; 60 + 25 + 25 cobrem 100.
+        assert_eq!(view.col_widths, [90.0, 200.0, 90.0]);
+        assert_eq!(view.row_heights, [60.0, 25.0, 25.0]);
+
+        // A última coluna e a última linha da planilha encerram a tela.
+        let end = e.view(0, 16_383, 1_048_575, 300.0, 100.0).unwrap();
+        assert_eq!((end.col_widths.len(), end.row_heights.len()), (1, 1));
+    }
+
+    #[test]
+    fn formats_a_range() {
+        let mut e = engine(&[(0, 0, "0,5"), (1, 0, "1234,5"), (0, 1, "texto")]);
+        let range = Range { col: 0, row: 0, cols: 2, rows: 2 };
+        e.format(0, range, StyleProperty::Bold, "true").unwrap();
+        e.format(0, range, StyleProperty::Fill, "#E7E5FB").unwrap();
+        for (col, row) in [(0, 0), (1, 0), (0, 1), (1, 1)] {
+            let style = cell(&e, col, row).unwrap().style.unwrap();
+            assert!(style.bold, "{col},{row}");
+            assert_eq!(style.fill.as_deref(), Some("#E7E5FB"));
+        }
+        // Fora do intervalo nada muda.
+        assert!(cell(&e, 2, 0).is_none());
+
+        e.format(0, Range { col: 0, row: 0, cols: 1, rows: 1 }, StyleProperty::Format, "0.00%").unwrap();
+        assert_eq!(shown(&e, 0, 0), "50,00%");
+        e.format(0, Range { col: 1, row: 0, cols: 1, rows: 1 }, StyleProperty::Format, "\"R$\" #,##0.00").unwrap();
+        assert_eq!(shown(&e, 1, 0), "R$ 1.234,50");
+
+        // Vazio remove a cor; "false" desliga o negrito.
+        e.format(0, range, StyleProperty::Fill, "").unwrap();
+        e.format(0, range, StyleProperty::Bold, "false").unwrap();
+        assert_eq!(cell(&e, 0, 1).unwrap().style, None);
+
+        assert!(e.format(0, range, StyleProperty::Align, "diagonal").is_err());
+        assert!(e.format(0, Range { col: 0, row: 0, cols: 0, rows: 1 }, StyleProperty::Bold, "true").is_err());
+        assert!(e.format(0, Range { col: 16_383, row: 0, cols: 2, rows: 1 }, StyleProperty::Bold, "true").is_err());
+    }
+
+    #[test]
+    fn clears_a_range_but_keeps_styles() {
+        let mut e = engine(&[(0, 0, "1"), (1, 0, "2"), (2, 0, "3"), (0, 1, "=A1+C1")]);
+        set_style(&mut e, 0, 0, StyleProperty::Bold, "true");
+        e.clear(0, Range { col: 0, row: 0, cols: 2, rows: 1 }).unwrap();
+        let cleared = cell(&e, 0, 0).unwrap();
+        assert_eq!(cleared.input, "");
+        assert!(cleared.style.unwrap().bold);
+        assert!(cell(&e, 1, 0).is_none());
+        assert_eq!(shown(&e, 2, 0), "3");
+        assert_eq!(shown(&e, 0, 1), "3");
+        e.undo().unwrap();
+        assert_eq!(shown(&e, 0, 1), "4");
+    }
+
+    #[test]
     fn saves_and_reopens_xlsx() {
         let mut e = engine(&[(0, 0, "Janeiro"), (1, 0, "18.500,00"), (2, 0, "9200"), (3, 0, "=B1-C1")]);
-        set_style(&mut e, 0, 0, "font.b", "true");
+        set_style(&mut e, 0, 0, StyleProperty::Bold, "true");
         // Célula vazia, só com cor de fundo.
-        set_style(&mut e, 4, 0, "fill.color", "#E7E5FB");
+        set_style(&mut e, 4, 0, StyleProperty::Fill, "#E7E5FB");
         let second = e.add_sheet().unwrap();
         e.set_cell(second, 0, 0, "outra planilha").unwrap();
 
