@@ -6,7 +6,7 @@ mod engine;
 use std::path::PathBuf;
 use std::sync::Mutex;
 
-use engine::{Engine, Range, SheetInfo, StyleProperty, View};
+use engine::{Engine, FillAxis, Range, SheetInfo, StyleProperty, View};
 use tauri::{AppHandle, State};
 use tauri_plugin_clipboard_manager::ClipboardExt;
 
@@ -65,6 +65,13 @@ fn format_cells(
 #[tauri::command]
 fn clear_cells(state: State<'_, AppState>, sheet: u32, range: Range) -> Result<(), String> {
     state.with(|engine| engine.clear(sheet, range))
+}
+
+/// Preenche a partir do intervalo até a linha ou coluna `to`, como ao
+/// arrastar a alça da seleção.
+#[tauri::command]
+fn fill_cells(state: State<'_, AppState>, sheet: u32, range: Range, axis: FillAxis, to: u32) -> Result<(), String> {
+    state.with(|engine| engine.fill(sheet, range, axis, to))
 }
 
 /// Copia (ou recorta) o intervalo para a área de transferência do sistema.
@@ -165,6 +172,7 @@ pub fn run() {
             get_view,
             format_cells,
             clear_cells,
+            fill_cells,
             copy_cells,
             paste_cells,
             get_sheets,

@@ -1,4 +1,5 @@
 import { createEngine, type CellView, type Range, type SheetInfo, type StyleProperty } from "./engine";
+import { formulaRefs } from "./refs";
 
 const HEADER_WIDTH = 48;
 const HEADER_HEIGHT = 26;
@@ -25,6 +26,11 @@ const COLORS = {
   error: "#b42318",
 };
 
+/** Cores dos intervalos citados na fórmula em edição, na ordem em que aparecem. */
+const REF_COLORS = ["#2563eb", "#c2410c", "#7c3aed", "#0f766e", "#be185d", "#4d7c0f"];
+/** Meio lado, em pixels, da área em que o mouse "pega" a alça de preenchimento. */
+const HANDLE_GRIP = 6;
+
 const engine = createEngine();
 const $ = <T extends HTMLElement>(selector: string) => document.querySelector<T>(selector)!;
 const wrap = $("#grid-wrap");
@@ -32,6 +38,7 @@ const canvas = $<HTMLCanvasElement>("#grid");
 const ctx = canvas.getContext("2d")!;
 const nameBox = $("#name-box");
 const fx = $<HTMLInputElement>("#fx");
+const editor = $<HTMLInputElement>("#cell-editor");
 const statusEl = $("#status");
 const docName = $("#doc-name");
 const docState = $("#doc-state");
@@ -89,6 +96,23 @@ interface Grip {
 let resizing: Grip | null = null;
 /** O mouse já se moveu desde que a borda foi pega. */
 let resized = false;
+/**
+ * Edição direto na célula: `null` quando o editor está fechado. No modo
+ * "enter" (começou digitando) as setas gravam e andam; no modo "edit" (F2 ou
+ * dois cliques) elas movem o cursor dentro do texto.
+ */
+let editMode: "enter" | "edit" | null = null;
+/**
+ * Referência inserida na fórmula clicando numa célula: o trecho do texto que
+ * ela ocupa e a célula onde o clique começou. Arrastar troca esse trecho.
+ */
+let pointing: { input: HTMLInputElement; start: number; end: number; from: Cell } | null = null;
+/** O mouse está arrastando para apontar um intervalo na fórmula. */
+let pointDrag = false;
+/** Destino do preenchimento enquanto a alça é arrastada; `null` se ainda não saiu da seleção. */
+let fillTarget: { axis: "rows" | "cols"; to: number } | null = null;
+/** A alça de preenchimento está sendo arrastada. */
+let fillDrag = false;
 /** Intervalo copiado ou recortado, que fica marcado com borda tracejada. */
 let copiedMark: { sheet: number; range: Range; cut: boolean } | null = null;
 /** Arquivo aberto, ou `null` para uma pasta nova. */
@@ -160,6 +184,43 @@ function gripAt(px: number, py: number): Grip | null {
 
 /** Fonte usada para desenhar o texto de uma célula. */
 const cellFont = (cell: CellView) => `${cell.style?.italic ? "italic " : ""}${cell.style?.bold ? "700 " : ""}14px ${FONT}`;
+
+/** Retângulo de um intervalo na tela, limitado à área visível. */
+function rectOf(range: Range) {
+  const left = xOf(range.col);
+  const top = yOf(range.row);
+  return { left, top, width: xOf(range.col + range.cols) - left, height: yOf(range.row + range.rows) - top };
+}
+
+/** Centro da alça de preenchimento, ou `null` se o canto da seleção não está na tela. */
+function fillHandle(): { x: number; y: number } | null {
+  if (editMode !== null) return null;
+  const range = selectedRange();
+  const colIndex = range.col + range.cols - pos.origin.col;
+  const rowIndex = range.row + range.rows - pos.origin.row;
+  if (colIndex < 1 || colIndex >= colX.length || rowIndex < 1 || rowIndex >= rowY.length) return null;
+  return { x: colX[colIndex], y: rowY[rowIndex] };
+}
+
+/** A seleção somada ao que a alça de preenchimento vai preencher. */
+function fillRange(): Range {
+  const range = selectedRange();
+  if (!fillTarget) return range;
+  if (fillTarget.axis === "rows") {
+    const first = Math.min(range.row, fillTarget.to);
+    const last = Math.max(range.row + range.rows - 1, fillTarget.to);
+    return { ...range, row: first, rows: last - first + 1 };
+  }
+  const first = Math.min(range.col, fillTarget.to);
+  const last = Math.max(range.col + range.cols - 1, fillTarget.to);
+  return { ...range, col: first, cols: last - first + 1 };
+}
+
+/** Fórmula em edição, na célula ou na barra, ou `null` se não há uma. */
+function formulaDraft(): string | null {
+  const editingNow = editMode !== null || document.activeElement === fx;
+  return editingNow && fx.value.startsWith("=") ? fx.value : null;
+}
 
 /** Célula sob um ponto do canvas. */
 function cellAt(px: number, py: number): Cell {
@@ -271,6 +332,40 @@ function draw() {
     ctx.strokeRect(selLeft + 0.5, selTop + 0.5, selWidth, selHeight);
   }
 
+  // Intervalos citados na fórmula em edição, cada um com uma cor
+  const formula = formulaDraft();
+  if (formula !== null) {
+    formulaRefs(formula).forEach((ref, index) => {
+      const rect = rectOf(ref);
+      if (rect.width <= 0 || rect.height <= 0) return;
+      const color = REF_COLORS[index % REF_COLORS.length];
+      ctx.globalAlpha = 0.1;
+      ctx.fillStyle = color;
+      ctx.fillRect(rect.left + 1, rect.top + 1, rect.width - 1, rect.height - 1);
+      ctx.globalAlpha = 1;
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 2;
+      ctx.strokeRect(rect.left + 0.5, rect.top + 0.5, rect.width, rect.height);
+    });
+  }
+
+  // Alça de preenchimento no canto da seleção, e o que ela vai preencher
+  const handle = fillHandle();
+  if (handle) {
+    ctx.fillStyle = "#fff";
+    ctx.fillRect(handle.x - 4, handle.y - 4, 9, 9);
+    ctx.fillStyle = COLORS.accent;
+    ctx.fillRect(handle.x - 3, handle.y - 3, 7, 7);
+  }
+  if (fillTarget) {
+    const rect = rectOf(fillRange());
+    ctx.strokeStyle = COLORS.accent;
+    ctx.lineWidth = 1;
+    ctx.setLineDash([3, 3]);
+    ctx.strokeRect(rect.left + 0.5, rect.top + 0.5, rect.width, rect.height);
+    ctx.setLineDash([]);
+  }
+
   // Borda tracejada no intervalo copiado ou recortado
   if (copiedMark?.sheet === sheet) {
     const mark = copiedMark.range;
@@ -309,6 +404,100 @@ function draw() {
     ctx.fillStyle = inRange(row, range.row, range.rows) ? COLORS.headerActiveInk : COLORS.muted;
     ctx.fillText(String(row + 1), HEADER_WIDTH / 2, rowY[index] + rowHeight / 2);
   });
+
+  positionEditor();
+}
+
+/** Põe o editor sobre a célula ativa, largo o bastante para o texto. */
+function positionEditor() {
+  if (editMode === null) return;
+  const colIndex = pos.anchor.col - pos.origin.col;
+  const rowIndex = pos.anchor.row - pos.origin.row;
+  if (colIndex < 0 || colIndex >= colWidths.length || rowIndex < 0 || rowIndex >= rowHeights.length) {
+    // A célula saiu da tela com a rolagem: a edição continua, fora de vista.
+    editor.style.left = "-9999px";
+    return;
+  }
+  const left = colX[colIndex];
+  ctx.font = `14px ${FONT}`;
+  const wanted = Math.max(colWidths[colIndex], ctx.measureText(editor.value).width + 2 * PADDING + 8);
+  editor.style.left = `${left}px`;
+  editor.style.top = `${rowY[rowIndex]}px`;
+  editor.style.width = `${Math.min(wanted, wrap.clientWidth - left) + 1}px`;
+  editor.style.height = `${rowHeights[rowIndex] + 1}px`;
+}
+
+/**
+ * Abre o editor sobre a célula ativa. `initial` é o texto que substitui o
+ * conteúdo (quando a pessoa começou a digitar); `null` edita o que já existe.
+ */
+function startEdit(initial: string | null, mode: "enter" | "edit") {
+  const current = cells.get(key(pos.anchor.col, pos.anchor.row))?.input ?? "";
+  editor.value = initial ?? current;
+  fx.value = editor.value;
+  dirty = initial !== null;
+  editMode = mode;
+  pointing = null;
+  editor.hidden = false;
+  positionEditor();
+  editor.focus();
+  editor.setSelectionRange(editor.value.length, editor.value.length);
+  draw();
+}
+
+/** Fecha o editor da célula, sem gravar nem descartar o texto. */
+function stopEdit() {
+  editMode = null;
+  pointing = null;
+  editor.hidden = true;
+}
+
+/** Descarta a edição em andamento. */
+function cancelEdit() {
+  dirty = false;
+  stopEdit();
+  syncFormulaBar();
+  canvas.focus();
+  draw();
+}
+
+/** Troca o texto em edição nos dois campos (célula e barra de fórmulas). */
+function setDraft(value: string) {
+  fx.value = value;
+  if (editMode !== null) editor.value = value;
+  dirty = true;
+}
+
+/** Campo em que a pessoa está editando, se houver. */
+function activeInput(): HTMLInputElement | null {
+  if (document.activeElement === fx) return fx;
+  return editMode !== null ? editor : null;
+}
+
+/**
+ * Diz se um clique na grade deve inserir uma referência na fórmula em vez de
+ * encerrar a edição: vale quando o cursor está logo depois de um operador,
+ * parêntese ou separador, ou de uma referência que acabou de ser apontada.
+ */
+function canPoint(input: HTMLInputElement): boolean {
+  if (!input.value.startsWith("=")) return false;
+  const caret = input.selectionStart ?? input.value.length;
+  if (pointing?.input === input && caret === pointing.end) return true;
+  return /[=+\-*/^(;:,<>&]$/.test(input.value.slice(0, caret).trimEnd());
+}
+
+/** Insere (ou troca) na fórmula a referência ao intervalo entre duas células. */
+function pointAt(input: HTMLInputElement, from: Cell, to: Cell) {
+  const first = { col: Math.min(from.col, to.col), row: Math.min(from.row, to.row) };
+  const last = { col: Math.max(from.col, to.col), row: Math.max(from.row, to.row) };
+  const single = first.col === last.col && first.row === last.row;
+  const text = single ? cellName(first) : `${cellName(first)}:${cellName(last)}`;
+  const start = pointing?.input === input ? pointing.start : (input.selectionStart ?? input.value.length);
+  const end = pointing?.input === input ? pointing.end : (input.selectionEnd ?? start);
+  setDraft(input.value.slice(0, start) + text + input.value.slice(end));
+  pointing = { input, start, end: start + text.length, from };
+  input.setSelectionRange(pointing.end, pointing.end);
+  draw();
 }
 
 /** Mostra a seleção na caixa de nome e a célula ativa na barra de fórmulas. */
@@ -395,11 +584,13 @@ async function write(): Promise<boolean> {
   const current = cells.get(key(anchor.col, anchor.row))?.input ?? "";
   if (!dirty || fx.value === current) {
     dirty = false;
+    stopEdit();
     return true;
   }
   try {
     await engine.setCell(sheet, anchor.col, anchor.row, fx.value);
     dirty = false;
+    stopEdit();
     copiedMark = null;
     statusEl.textContent = "Pronto";
     markModified();
@@ -435,6 +626,23 @@ async function format(property: StyleProperty, value: string) {
 function toggle(property: "bold" | "italic" | "underline" | "strike") {
   const current = cells.get(key(pos.anchor.col, pos.anchor.row))?.style?.[property] ?? false;
   return format(property, String(!current));
+}
+
+/** Preenche da seleção até o destino da alça e seleciona tudo o que foi preenchido. */
+async function fillSelection(target: { axis: "rows" | "cols"; to: number }) {
+  const source = selectedRange();
+  const filled = fillRange();
+  try {
+    await engine.fill(sheet, source, target.axis, target.to);
+    pos.anchor = { col: filled.col, row: filled.row };
+    pos.focus = { col: filled.col + filled.cols - 1, row: filled.row + filled.rows - 1 };
+    copiedMark = null;
+    statusEl.textContent = "Pronto";
+    markModified();
+  } catch (error) {
+    statusEl.textContent = `Erro ao preencher: ${error}`;
+  }
+  await refresh();
 }
 
 /** Copia ou recorta a seleção para a área de transferência. */
@@ -707,10 +915,24 @@ canvas.addEventListener("pointerdown", (event) => {
     canvas.setPointerCapture(event.pointerId);
     return;
   }
+  const handle = fillHandle();
+  if (handle && Math.abs(px - handle.x) <= HANDLE_GRIP && Math.abs(py - handle.y) <= HANDLE_GRIP) {
+    fillDrag = true;
+    fillTarget = null;
+    canvas.setPointerCapture(event.pointerId);
+    return;
+  }
   if (px < HEADER_WIDTH || py < HEADER_HEIGHT) return;
   const cell = cellAt(px, py);
-  dragging = true;
   canvas.setPointerCapture(event.pointerId);
+  // No meio de uma fórmula, clicar numa célula insere a referência a ela.
+  const input = activeInput();
+  if (input && canPoint(input)) {
+    pointDrag = true;
+    pointAt(input, cell, cell);
+    return;
+  }
+  dragging = true;
   // Clicar em outra célula no meio de uma edição grava a edição, como no Excel.
   void (async () => {
     if (!(await write())) return;
@@ -733,9 +955,29 @@ canvas.addEventListener("pointermove", (event) => {
     draw();
     return;
   }
+  if (fillDrag) {
+    // Preenche no sentido em que o mouse mais se afastou da seleção.
+    const cell = cellAt(px, py);
+    const range = selectedRange();
+    const outside = (value: number, start: number, size: number) =>
+      value < start ? value - start : value >= start + size ? value - (start + size - 1) : 0;
+    const rows = outside(cell.row, range.row, range.rows);
+    const cols = outside(cell.col, range.col, range.cols);
+    if (rows === 0 && cols === 0) fillTarget = null;
+    else if (Math.abs(rows) >= Math.abs(cols)) fillTarget = { axis: "rows", to: cell.row };
+    else fillTarget = { axis: "cols", to: cell.col };
+    draw();
+    return;
+  }
+  if (pointDrag) {
+    if (pointing) pointAt(pointing.input, pointing.from, cellAt(px, py));
+    return;
+  }
   if (!dragging) {
     const grip = gripAt(px, py);
-    canvas.style.cursor = grip ? (grip.kind === "col" ? "col-resize" : "row-resize") : "cell";
+    const handle = fillHandle();
+    const onHandle = handle !== null && Math.abs(px - handle.x) <= HANDLE_GRIP && Math.abs(py - handle.y) <= HANDLE_GRIP;
+    canvas.style.cursor = grip ? (grip.kind === "col" ? "col-resize" : "row-resize") : onHandle ? "crosshair" : "cell";
     return;
   }
   const cell = cellAt(px, py);
@@ -753,6 +995,24 @@ const endDrag = () => {
     // Um clique na borda, sem arrastar, não muda nada.
     if (resized) void resize(grip, grip.kind === "col" ? colWidths[grip.index] : rowHeights[grip.index]);
   }
+  if (fillDrag) {
+    fillDrag = false;
+    const target = fillTarget;
+    if (target) {
+      void fillSelection(target).finally(() => {
+        fillTarget = null;
+        draw();
+      });
+    }
+  }
+  if (pointDrag) {
+    pointDrag = false;
+    // O clique tirou o foco do campo: devolve, com o cursor depois da referência.
+    if (pointing) {
+      pointing.input.focus();
+      pointing.input.setSelectionRange(pointing.end, pointing.end);
+    }
+  }
 };
 canvas.addEventListener("pointerup", endDrag);
 canvas.addEventListener("pointercancel", endDrag);
@@ -761,6 +1021,11 @@ canvas.addEventListener("pointercancel", endDrag);
 canvas.addEventListener("dblclick", (event) => {
   const { px, py } = pointerAt(event);
   const grip = gripAt(px, py);
+  // Dois cliques numa célula abrem a edição do conteúdo dela.
+  if (!grip && px >= HEADER_WIDTH && py >= HEADER_HEIGHT && editMode === null) {
+    startEdit(null, "edit");
+    return;
+  }
   if (grip?.kind !== "col") return;
   const col = pos.origin.col + grip.index;
   let widest = 0;
@@ -833,24 +1098,66 @@ canvas.addEventListener("keydown", (event) => {
   } else if (event.key === "Tab") {
     event.preventDefault();
     void select({ col: pos.anchor.col + (event.shiftKey ? -1 : 1), row: pos.anchor.row });
-  } else if (event.key === "Enter" || event.key === "F2") {
+  } else if (event.key === "Enter") {
     event.preventDefault();
-    fx.focus();
+    void select({ col: pos.anchor.col, row: pos.anchor.row + (event.shiftKey ? -1 : 1) });
+  } else if (event.key === "F2") {
+    event.preventDefault();
+    startEdit(null, "edit");
   } else if (event.key === "Delete" || event.key === "Backspace") {
     event.preventDefault();
     void clearSelection();
   } else if (event.key.length === 1 && !shortcut && !event.altKey) {
     // Digitar sobre a célula começa uma edição nova, como no Excel.
     event.preventDefault();
-    fx.value = event.key;
-    dirty = true;
-    fx.focus();
+    startEdit(event.key, "enter");
+  }
+});
+
+editor.addEventListener("input", () => {
+  fx.value = editor.value;
+  dirty = true;
+  pointing = null;
+  draw();
+});
+
+editor.addEventListener("keydown", (event) => {
+  const moves: Record<string, [number, number]> = {
+    ArrowLeft: [-1, 0],
+    ArrowRight: [1, 0],
+    ArrowUp: [0, -1],
+    ArrowDown: [0, 1],
+  };
+  const move = moves[event.key];
+  if (event.key === "Enter") {
+    event.preventDefault();
+    void commit(0, event.shiftKey ? -1 : 1);
+  } else if (event.key === "Tab") {
+    event.preventDefault();
+    void commit(event.shiftKey ? -1 : 1, 0);
+  } else if (event.key === "Escape") {
+    event.preventDefault();
+    cancelEdit();
+  } else if (move && editMode === "enter" && !editor.value.startsWith("=")) {
+    // Quem começou digitando um valor grava e anda com as setas, como no
+    // Excel. Em fórmulas as setas só movem o cursor.
+    event.preventDefault();
+    void commit(move[0], move[1]);
+  } else {
+    pointing = null;
   }
 });
 
 fx.addEventListener("input", () => {
   dirty = true;
+  pointing = null;
+  if (editMode !== null) editor.value = fx.value;
+  draw();
 });
+
+// Os intervalos da fórmula aparecem coloridos enquanto a barra tem o foco.
+fx.addEventListener("focus", draw);
+fx.addEventListener("blur", draw);
 
 fx.addEventListener("keydown", (event) => {
   if (event.key === "Enter") {
@@ -861,9 +1168,9 @@ fx.addEventListener("keydown", (event) => {
     void commit(event.shiftKey ? -1 : 1, 0);
   } else if (event.key === "Escape") {
     event.preventDefault();
-    dirty = false;
-    syncFormulaBar();
-    canvas.focus();
+    cancelEdit();
+  } else {
+    pointing = null;
   }
 });
 

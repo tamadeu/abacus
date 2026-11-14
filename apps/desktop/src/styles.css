@@ -144,6 +144,7 @@ body {
 }
 
 #grid-wrap {
+  position: relative;
   flex: 1;
   min-height: 0;
   overflow: hidden;
@@ -154,6 +155,19 @@ body {
 #grid {
   display: block;
   outline: none;
+}
+
+/* Editor que aparece sobre a célula ativa. */
+#cell-editor {
+  position: absolute;
+  margin: 0;
+  padding: 0 7px;
+  border: 2px solid var(--accent);
+  border-radius: 0;
+  outline: none;
+  background: #fff;
+  font: 14px Inter, system-ui, sans-serif;
+  color: var(--ink);
 }
 
 .doc {

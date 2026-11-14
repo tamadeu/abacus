@@ -100,6 +100,11 @@ export interface Engine {
   format(sheet: number, range: Range, property: StyleProperty, value: string): Promise<void>;
   /** Apaga o conteúdo das células do intervalo, mantendo o estilo. */
   clearCells(sheet: number, range: Range): Promise<void>;
+  /**
+   * Preenche a partir do intervalo até a linha ou coluna `to`, como ao
+   * arrastar a alça da seleção.
+   */
+  fill(sheet: number, range: Range, axis: "rows" | "cols", to: number): Promise<void>;
   /** Copia o intervalo para a área de transferência. Com `cut`, colar apaga a origem. */
   copy(sheet: number, range: Range, cut: boolean): Promise<void>;
   /** Cola a partir da célula dada. Devolve o intervalo preenchido, ou `null` se não havia o que colar. */
@@ -175,6 +180,10 @@ class TauriEngine implements Engine {
     return invoke("clear_cells", { sheet, range });
   }
 
+  fill(sheet: number, range: Range, axis: "rows" | "cols", to: number): Promise<void> {
+    return invoke("fill_cells", { sheet, range, axis, to });
+  }
+
   copy(sheet: number, range: Range, cut: boolean): Promise<void> {
     return invoke("copy_cells", { sheet, range, cut });
   }
@@ -196,7 +205,8 @@ class TauriEngine implements Engine {
  * Substituto usado quando a interface roda no navegador (`npm run dev`),
  * fora do Tauri. Guarda o que foi digitado, mas não calcula fórmulas, não
  * formata, não redimensiona, não desfaz edições e não abre nem salva arquivos.
- * Copiar e colar funcionam só dentro da própria página.
+ * Copiar e colar funcionam só dentro da própria página, e preencher com a
+ * alça repete os valores, sem continuar sequências.
  */
 class PreviewEngine implements Engine {
   readonly notice = "Pré-visualização no navegador (sem motor de cálculo)";
@@ -266,6 +276,27 @@ class PreviewEngine implements Engine {
 
   async clearCells(sheet: number, range: Range): Promise<void> {
     for (const [key] of this.inRange(sheet, range)) this.cells.delete(key);
+  }
+
+  async fill(sheet: number, range: Range, axis: "rows" | "cols", to: number): Promise<void> {
+    const input = (col: number, row: number) => this.cells.get(`${sheet}:${col},${row}`)?.input ?? "";
+    // Posição dentro da origem, repetida em ciclo.
+    const wrapIn = (value: number, start: number, size: number) => start + ((((value - start) % size) + size) % size);
+    if (axis === "rows") {
+      const step = to >= range.row ? 1 : -1;
+      for (let row = step > 0 ? range.row + range.rows : range.row - 1; step > 0 ? row <= to : row >= to; row += step) {
+        for (let col = range.col; col < range.col + range.cols; col++) {
+          await this.setCell(sheet, col, row, input(col, wrapIn(row, range.row, range.rows)));
+        }
+      }
+    } else {
+      const step = to >= range.col ? 1 : -1;
+      for (let col = step > 0 ? range.col + range.cols : range.col - 1; step > 0 ? col <= to : col >= to; col += step) {
+        for (let row = range.row; row < range.row + range.rows; row++) {
+          await this.setCell(sheet, col, row, input(wrapIn(col, range.col, range.cols), row));
+        }
+      }
+    }
   }
 
   async copy(sheet: number, range: Range, cut: boolean): Promise<void> {

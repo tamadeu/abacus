@@ -48,6 +48,16 @@ pub struct Range {
     pub rows: u32,
 }
 
+/// Direção de um preenchimento com a alça da seleção.
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum FillAxis {
+    /// Para baixo ou para cima.
+    Rows,
+    /// Para a direita ou para a esquerda.
+    Cols,
+}
+
 /// Propriedades de estilo que a interface pode alterar.
 #[derive(Debug, Clone, Copy, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -288,6 +298,18 @@ impl Engine {
     /// Apaga o conteúdo das células do retângulo, mantendo o estilo.
     pub fn clear(&mut self, sheet: u32, range: Range) -> Result<(), String> {
         self.model.range_clear_contents(&area(sheet, range)?)
+    }
+
+    /// Preenche a partir do intervalo até a linha ou coluna `to` (a partir de
+    /// zero), como ao arrastar a alça da seleção: continua sequências e
+    /// ajusta as referências das fórmulas.
+    pub fn fill(&mut self, sheet: u32, range: Range, axis: FillAxis, to: u32) -> Result<(), String> {
+        let source = area(sheet, range)?;
+        let to = to_i32(to)?.saturating_add(1);
+        match axis {
+            FillAxis::Rows => self.model.auto_fill_rows(&source, to),
+            FillAxis::Cols => self.model.auto_fill_columns(&source, to),
+        }
     }
 
     /// Copia (ou recorta) o intervalo e devolve o conteúdo como texto separado
@@ -743,6 +765,26 @@ mod tests {
 
     fn range(col: u32, row: u32, cols: u32, rows: u32) -> Range {
         Range { col, row, cols, rows }
+    }
+
+    #[test]
+    fn fills_series_and_formulas() {
+        let mut e = engine(&[(0, 0, "1"), (0, 1, "2"), (1, 0, "=A1*10"), (3, 0, "Jan")]);
+        // 1, 2 arrastados até a linha 5 continuam a sequência.
+        e.fill(0, range(0, 0, 1, 2), FillAxis::Rows, 4).unwrap();
+        assert_eq!([shown(&e, 0, 2), shown(&e, 0, 3), shown(&e, 0, 4)], ["3", "4", "5"]);
+        // A fórmula desce com a referência ajustada.
+        e.fill(0, range(1, 0, 1, 1), FillAxis::Rows, 4).unwrap();
+        let last = cell(&e, 1, 4).unwrap();
+        assert_eq!((last.input.as_str(), last.display.as_str()), ("=A5*10", "50"));
+        // Para a direita.
+        e.fill(0, range(1, 0, 1, 1), FillAxis::Cols, 2).unwrap();
+        assert_eq!(cell(&e, 2, 0).unwrap().input, "=B1*10");
+
+        e.undo().unwrap();
+        assert!(cell(&e, 2, 0).is_none());
+        // Destino dentro do próprio intervalo não é um preenchimento.
+        assert!(e.fill(0, range(0, 0, 1, 2), FillAxis::Rows, 1).is_err());
     }
 
     #[test]

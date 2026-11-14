@@ -26,7 +26,13 @@ Projeto no início. O que já funciona:
   (geral, duas casas, moeda, porcentagem), com Ctrl+B, Ctrl+I e Ctrl+U.
 - Larguras de coluna e alturas de linha: vêm do arquivo, mudam arrastando a
   borda do cabeçalho, e dois cliques na borda ajustam a coluna ao conteúdo.
-- Edição pela barra de fórmulas (Enter, Tab e Esc); Delete apaga a seleção.
+- Edição direto na célula (digitando, com F2 ou com dois cliques) e pela
+  barra de fórmulas; Enter, Tab e as setas gravam, Esc cancela e Delete apaga
+  a seleção.
+- Ao escrever uma fórmula, os intervalos citados ficam coloridos na grade, e
+  clicar ou arrastar nas células insere a referência.
+- Alça de preenchimento no canto da seleção: arrastar continua sequências
+  (1, 2, 3…) e copia fórmulas ajustando as referências.
 - Copiar, recortar e colar (Ctrl+C, Ctrl+X, Ctrl+V). Dentro do Ábaco a
   colagem leva fórmulas, com as referências ajustadas, e estilos; a área de
   transferência do sistema recebe e aceita texto separado por tabulações,
@@ -45,8 +51,9 @@ Limitações conhecidas:
   documentação da Microsoft e não foram conferidos num Excel em português.
 - A coluna não alarga sozinha quando o número digitado não cabe; ele aparece
   como `####` até a coluna ser ajustada.
-- Não há edição direto na célula (só pela barra de fórmulas), nem preencher
-  arrastando a alça da seleção.
+- As referências coloridas aparecem na grade, mas não no texto da fórmula, e
+  não há sugestão de nomes de função ao digitar.
+- Clicar para inserir referência só funciona dentro da mesma planilha.
 - Colar para outros programas leva só os valores, sem formatação.
 - Células mescladas, bordas, quebra de texto, tamanho de fonte e gráficos do
   arquivo ainda não aparecem na grade.
@@ -90,9 +97,9 @@ cargo test
 
 ## Próximos passos
 
-1. Edição direto na célula, com destaque das referências.
-2. Preencher arrastando a alça da seleção.
-3. Células mescladas, bordas e quebra de texto.
+1. Células mescladas, bordas e quebra de texto.
+2. Inserir e excluir linhas e colunas.
+3. Sugestão de funções ao digitar uma fórmula.
 4. Propor o português do Brasil ao IronCalc original.
 5. Versão web com o motor em WebAssembly.
 
