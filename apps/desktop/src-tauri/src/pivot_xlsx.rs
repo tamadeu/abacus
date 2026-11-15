@@ -333,7 +333,7 @@ fn pivot_table_xml(e: &Export, fields: &[CacheField], cache_id: u32) -> String {
         let hidden: Vec<&String> = p.filters.iter().filter(|x| x.field == f.name).flat_map(|x| &x.hidden).collect();
         let mut items = String::new();
         for (k, text) in f.item_text.iter().enumerate() {
-            if hidden.iter().any(|h| *h == text) {
+            if hidden.contains(&text) {
                 items.push_str(&format!("<item h=\"1\" x=\"{k}\"/>"));
             } else {
                 items.push_str(&format!("<item x=\"{k}\"/>"));
