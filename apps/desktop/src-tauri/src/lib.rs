@@ -28,6 +28,8 @@ use validation::Validation;
 /// Pasta de trabalho aberta na janela.
 struct AppState {
     engine: Mutex<Engine>,
+    /// O arquivo que a linha de comando mandou abrir, até a interface perguntar por ele.
+    startup: Mutex<Option<String>>,
 }
 
 impl AppState {
@@ -279,6 +281,12 @@ fn open_file(state: State<'_, AppState>, path: String) -> Result<(), String> {
     })
 }
 
+/// O arquivo aberto na partida (`abacus arquivo.xlsx`), uma vez só.
+#[tauri::command]
+fn startup_file(state: State<'_, AppState>) -> Option<String> {
+    state.startup.lock().ok().and_then(|mut path| path.take())
+}
+
 /// Grava uma planilha como CSV, sem alterar a pasta aberta.
 #[tauri::command]
 fn export_csv(state: State<'_, AppState>, sheet: u32, path: String) -> Result<(), String> {
@@ -456,11 +464,24 @@ fn save_file(state: State<'_, AppState>, path: String) -> Result<(), String> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    let engine = Engine::new().expect("erro ao criar a pasta de trabalho");
+    // `abacus arquivo.xlsx` (ou .csv) abre o arquivo já na partida.
+    let requested = std::env::args().nth(1).map(PathBuf::from).filter(|path| path.is_file());
+    let opened = requested.as_ref().and_then(|path| {
+        match path.extension().and_then(|e| e.to_str()).map(str::to_ascii_lowercase).as_deref() {
+            Some("xlsx") => Engine::open(path).ok(),
+            Some("csv") => Engine::from_csv(path).ok(),
+            _ => None,
+        }
+    });
+    let startup = opened.as_ref().and(requested).map(|path| path.to_string_lossy().into_owned());
+    let engine = match opened {
+        Some(engine) => engine,
+        None => Engine::new().expect("erro ao criar a pasta de trabalho"),
+    };
     tauri::Builder::default()
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_dialog::init())
-        .manage(AppState { engine: Mutex::new(engine) })
+        .manage(AppState { engine: Mutex::new(engine), startup: Mutex::new(startup) })
         .invoke_handler(tauri::generate_handler![
             set_cell,
             get_view,
@@ -512,6 +533,7 @@ pub fn run() {
             undo,
             redo,
             open_file,
+            startup_file,
             save_file,
             export_csv,
             selection_stats,

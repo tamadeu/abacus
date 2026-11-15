@@ -2471,6 +2471,28 @@ mod tests {
         });
         assert_eq!(data.categories, ["1", "2"]);
         assert_eq!(data.series.iter().map(|s| s.name.as_str()).collect::<Vec<_>>(), ["Série 1", "Série 2"]);
+
+        // Dispersão: a primeira coluna é o X (números), ou 1, 2, 3… se for de texto.
+        let scatter = |e: &Engine| {
+            e.data_of(&Chart {
+                id: 1,
+                sheet: 0,
+                kind: ChartKind::Scatter,
+                title: String::new(),
+                range: Range { col: 0, row: 0, cols: 2, rows: 3 },
+                from_col: 4,
+                from_row: 0,
+                to_col: 8,
+                to_row: 9,
+                opts: Default::default(),
+            })
+        };
+        let numeric = engine(&[(0, 0, "X"), (1, 0, "Y"), (0, 1, "1,5"), (1, 1, "10"), (0, 2, "4"), (1, 2, "20")]);
+        let data = scatter(&numeric);
+        assert_eq!(data.x, [Some(1.5), Some(4.0)]);
+        assert_eq!(data.series.len(), 1);
+        let text = engine(&[(0, 0, "Mês"), (1, 0, "Y"), (0, 1, "Jan"), (1, 1, "10"), (0, 2, "Fev"), (1, 2, "20")]);
+        assert_eq!(scatter(&text).x, [Some(1.0), Some(2.0)]);
     }
 
     #[test]

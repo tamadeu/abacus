@@ -20,11 +20,16 @@ Projeto no início. O que já funciona:
 - Importar e exportar CSV: ao abrir, o separador (`;`, tabulação ou `,`) e a
   codificação (UTF-8 ou Windows-1252) são detectados; ao salvar como `.csv`,
   sai só a planilha ativa, com os valores como aparecem, separados por `;`.
-- Gráficos de colunas, barras, linhas e pizza (aba Inserir): vêm da seleção
-  ou da tabela em volta da célula ativa e acompanham os valores. Arraste para
-  mover, use a alça do canto para redimensionar, Delete para apagar; dois
-  cliques (ou botão direito) abrem título, tipo e intervalo de dados. Vão para
-  o `.xlsx` como gráficos nativos do Excel e voltam ao abrir o arquivo.
+- Gráficos (aba Inserir): colunas, barras, linhas, área, pizza, rosca e
+  dispersão. Vêm da seleção ou da tabela em volta da célula ativa e
+  acompanham os valores. Arraste para mover, use a alça do canto para
+  redimensionar, Delete para apagar; dois cliques (ou botão direito) abrem as
+  opções: título, tipo, intervalo, empilhado ou 100%, legenda (posição),
+  rótulos de dados, linhas de grade e suaves, títulos dos eixos, mínimo e
+  máximo do eixo e, por série, cor, "mostrar como linha" (combinado), eixo
+  secundário e linha de tendência (linear, polinomial, exponencial,
+  logarítmica ou média móvel, com equação e R²). Vão para o `.xlsx` como
+  gráficos nativos do Excel, com tudo isso, e voltam ao abrir o arquivo.
 - Formatação condicional (aba Dados): regras de valor (maior, menor, igual,
   entre…), de texto (contém, começa com…), duplicados, únicos, vazias, acima ou
   abaixo da média, maiores e menores, escalas de duas ou três cores e barras
@@ -129,10 +134,13 @@ Limitações conhecidas:
   acompanham linhas e colunas inseridas e não podem ficar sobre os dados de
   origem nem sobre outra tabela. Ainda não há segmentação de dados, expandir e
   recolher grupos, nem detalhar uma célula.
-- Gráficos: só colunas, barras, linhas e pizza (os de outros tipos, como
-  dispersão ou área, somem ao salvar); ficam presos a células, então não
-  acompanham linhas e colunas inseridas ou excluídas; criar, mover ou apagar
-  um gráfico não entra no desfazer; empilhados viram agrupados.
+- Gráficos: ficam presos a células, então não acompanham linhas e colunas
+  inseridas ou excluídas; criar, mover ou apagar um gráfico não entra no
+  desfazer. Os tipos que o Abacus não conhece (bolhas, radar, 3D…) somem ao
+  salvar. O eixo secundário e o combinado valem para colunas, linhas e área;
+  na pizza só a primeira série aparece, e a rosca mostra um anel por série.
+  Passe o caminho de um `.xlsx` ou `.csv` na linha de comando para abri-lo
+  já na partida.
 - As bordas aplicadas pela barra são sempre finas e pretas; as do arquivo
   aparecem com cor e espessura, mas a dupla é desenhada como grossa.
 - Bordas e mesclagem não funcionam numa linha ou coluna inteira.

@@ -151,7 +151,7 @@ impl Chart {
             .styles
             .get(index)
             .and_then(|s| s.color.as_deref())
-            .and_then(|c| valid_color(c))
+            .and_then(valid_color)
             .unwrap_or_else(|| PALETTE[index % PALETTE.len()].to_string())
     }
 
@@ -177,10 +177,10 @@ impl Chart {
             self.opts.y_max = None;
         }
         // Um mínimo acima do máximo não desenha nada.
-        if let (Some(min), Some(max)) = (self.opts.y_min, self.opts.y_max) {
-            if min >= max {
-                self.opts.y_max = None;
-            }
+        if let (Some(min), Some(max)) = (self.opts.y_min, self.opts.y_max)
+            && min >= max
+        {
+            self.opts.y_max = None;
         }
         self.opts.styles.truncate(MAX_CHART_COLS as usize);
     }
@@ -257,14 +257,11 @@ pub fn build_data(range: Range, scatter: bool, cell: impl Fn(u32, u32) -> CellIn
     let categories = (first_row..last_row)
         .map(|row| if layout.categories { cell(row, range.col).text } else { (row - first_row + 1).to_string() })
         .collect();
+    // Na dispersão o X é a primeira coluna; se ela não tem número nenhum (são textos), vale 1, 2, 3…
+    let numeric_x =
+        scatter && layout.categories && (first_row..last_row).any(|row| cell(row, range.col).number.is_some());
     let x = (first_row..last_row)
-        .map(|row| {
-            if scatter && layout.categories {
-                cell(row, range.col).number
-            } else {
-                Some(f64::from(row - first_row + 1))
-            }
-        })
+        .map(|row| if numeric_x { cell(row, range.col).number } else { Some(f64::from(row - first_row + 1)) })
         .collect();
     let series = (first_col..range.col + range.cols)
         .enumerate()
@@ -1055,11 +1052,13 @@ fn read_chart(chart_xml: &Node, anchor: &Node, sheet_name: &str) -> Option<Chart
     };
 
     // Opções: empilhamento, séries (cor, linha, eixo secundário, tendência), rótulos e eixos.
-    let mut opts = ChartOptions::default();
-    opts.stacking = match base.child("grouping").and_then(|g| g.attr("val")) {
-        Some("stacked") => Stacking::Stacked,
-        Some("percentStacked") => Stacking::Percent,
-        _ => Stacking::None,
+    let mut opts = ChartOptions {
+        stacking: match base.child("grouping").and_then(|g| g.attr("val")) {
+            Some("stacked") => Stacking::Stacked,
+            Some("percentStacked") => Stacking::Percent,
+            _ => Stacking::None,
+        },
+        ..ChartOptions::default()
     };
     let axis_ids = |group: &Node| -> Vec<String> {
         group.children.iter().filter(|n| n.name == "axId").filter_map(|n| n.attr("val")).map(str::to_string).collect()

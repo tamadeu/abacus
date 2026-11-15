@@ -76,8 +76,9 @@ fn solve(mut a: Vec<Vec<f64>>, mut b: Vec<f64>) -> Option<Vec<f64>> {
         b.swap(col, pivot);
         for row in col + 1..n {
             let factor = a[row][col] / a[col][col];
-            for k in col..n {
-                a[row][k] -= factor * a[col][k];
+            let pivot_row = a[col].clone();
+            for (cell, p) in a[row][col..].iter_mut().zip(&pivot_row[col..]) {
+                *cell -= factor * p;
             }
             b[row] -= factor * b[col];
         }
@@ -156,6 +157,9 @@ fn r_squared(ys: &[f64], predicted: &[f64]) -> f64 {
     if total == 0.0 { 1.0 } else { 1.0 - residual / total }
 }
 
+/// Coeficientes, função de previsão e texto da equação de um ajuste.
+type Fit = (Vec<f64>, Box<dyn Fn(f64) -> f64>, String);
+
 /// A tendência de uma série. `points` são pares (x, y) já sem valores vazios.
 pub fn compute(trend: &Trend, points: &[(f64, f64)]) -> TrendLine {
     let trend = trend.sanitized();
@@ -180,7 +184,7 @@ pub fn compute(trend: &Trend, points: &[(f64, f64)]) -> TrendLine {
         (xs.iter().cloned().fold(f64::INFINITY, f64::min), xs.iter().cloned().fold(f64::NEG_INFINITY, f64::max));
 
     // Cada tipo vira um polinômio em dados transformados (ln y ou ln x).
-    let (coefficients, predict, equation): (Vec<f64>, Box<dyn Fn(f64) -> f64>, String) = match trend.kind {
+    let (coefficients, predict, equation): Fit = match trend.kind {
         TrendKind::Linear | TrendKind::Poly => {
             let degree = if trend.kind == TrendKind::Linear { 1 } else { trend.order as usize };
             let Some(c) = polyfit(&xs, &ys, degree) else { return TrendLine::default() };

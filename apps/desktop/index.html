@@ -100,7 +100,10 @@
       <button type="button" data-action="chart-column" title="Gráfico de colunas com a seleção (ou a tabela em volta da célula ativa)">Colunas</button>
       <button type="button" data-action="chart-bar" title="Gráfico de barras">Barras</button>
       <button type="button" data-action="chart-line" title="Gráfico de linhas">Linhas</button>
+      <button type="button" data-action="chart-area" title="Gráfico de área">Área</button>
       <button type="button" data-action="chart-pie" title="Gráfico de pizza">Pizza</button>
+      <button type="button" data-action="chart-donut" title="Gráfico de rosca">Rosca</button>
+      <button type="button" data-action="chart-scatter" title="Gráfico de dispersão (a primeira coluna é o X)">Dispersão</button>
     </div>
 
     <div class="toolbar" id="panel-data" role="tabpanel" aria-labelledby="tab-data" hidden>
@@ -197,10 +200,49 @@
           <option value="column">Colunas</option>
           <option value="bar">Barras</option>
           <option value="line">Linhas</option>
+          <option value="area">Área</option>
           <option value="pie">Pizza</option>
+          <option value="donut">Rosca</option>
+          <option value="scatter">Dispersão</option>
         </select>
       </label>
       <label>Dados <input id="chart-range" type="text" autocomplete="off" placeholder="A1:C5" /></label>
+      <div class="chart-row">
+        <label>
+          Empilhar
+          <select id="chart-stacking">
+            <option value="none">Não</option>
+            <option value="stacked">Empilhado</option>
+            <option value="percent">100%</option>
+          </select>
+        </label>
+        <label>
+          Legenda
+          <select id="chart-legend">
+            <option value="auto">Automática</option>
+            <option value="none">Nenhuma</option>
+            <option value="bottom">Embaixo</option>
+            <option value="top">Em cima</option>
+            <option value="right">À direita</option>
+            <option value="left">À esquerda</option>
+          </select>
+        </label>
+      </div>
+      <div class="chart-checks">
+        <label class="check"><input type="checkbox" id="chart-labels" /> Rótulos de dados</label>
+        <label class="check"><input type="checkbox" id="chart-grid" /> Linhas de grade</label>
+        <label class="check"><input type="checkbox" id="chart-smooth" /> Linhas suaves</label>
+      </div>
+      <div class="chart-row" id="chart-axes">
+        <label>Título do eixo X <input id="chart-xtitle" type="text" autocomplete="off" /></label>
+        <label>Título do eixo Y <input id="chart-ytitle" type="text" autocomplete="off" /></label>
+        <label>Mínimo <input id="chart-ymin" type="text" inputmode="decimal" autocomplete="off" placeholder="auto" /></label>
+        <label>Máximo <input id="chart-ymax" type="text" inputmode="decimal" autocomplete="off" placeholder="auto" /></label>
+      </div>
+      <fieldset id="chart-series-box">
+        <legend>Séries</legend>
+        <div id="chart-series"></div>
+      </fieldset>
       <p id="chart-error" role="alert" hidden></p>
       <div class="filter-actions">
         <button type="button" id="chart-delete">Excluir</button>

@@ -204,12 +204,39 @@ export interface Stats {
 }
 
 /** Tipo de um gráfico. */
-export type ChartKind = "column" | "bar" | "line" | "pie";
+export type ChartKind = "column" | "bar" | "line" | "pie" | "area" | "scatter" | "donut";
+export type Stacking = "none" | "stacked" | "percent";
+export type LegendPos = "auto" | "none" | "bottom" | "right" | "top" | "left";
+export type TrendKind = "linear" | "poly" | "exp" | "log" | "moving";
+
+/** Linha de tendência de uma série. */
+export interface Trend {
+  kind: TrendKind;
+  /** Grau do polinômio (2 a 6). */
+  order: number;
+  /** Pontos da média móvel. */
+  period: number;
+  equation: boolean;
+  r2: boolean;
+}
+
+/** Aparência e extras de uma série (na ordem em que saem do intervalo). */
+export interface SeriesStyle {
+  /** `#RRGGBB`; nulo usa a paleta. */
+  color: string | null;
+  /** Em colunas, a série vira linha (combinado). */
+  line: boolean;
+  /** Usa o eixo de valores da direita. */
+  secondary: boolean;
+  trend: Trend | null;
+}
 
 /** O que o gráfico mostra, lido das células. */
 export interface ChartData {
   categories: string[];
-  series: { name: string; values: (number | null)[] }[];
+  /** Valor de X de cada categoria (1, 2, 3… ou, na dispersão, o número da primeira coluna). */
+  x: (number | null)[];
+  series: { name: string; values: (number | null)[]; trend?: { points: [number, number][]; label: string } }[];
 }
 
 /**
@@ -226,6 +253,17 @@ export interface ChartInfo {
   fromRow: number;
   toCol: number;
   toRow: number;
+  stacking: Stacking;
+  legend: LegendPos;
+  /** Mostra os valores (ou os percentuais, na pizza) sobre os dados. */
+  labels: boolean;
+  xTitle: string;
+  yTitle: string;
+  yMin: number | null;
+  yMax: number | null;
+  grid: boolean;
+  smooth: boolean;
+  styles: SeriesStyle[];
   data: ChartData;
 }
 
@@ -323,6 +361,8 @@ export interface FileAccess {
    * caminho, ou `null` se a pessoa cancelou.
    */
   open(): Promise<string | null>;
+  /** O arquivo que a linha de comando mandou abrir, se houver (uma vez só). */
+  startup?(): Promise<string | null>;
   /**
    * Salva em `path`; sem caminho, pergunta onde. Se o caminho termina em
    * `.csv`, grava só a planilha `sheet`, como texto. Devolve o caminho usado,
@@ -463,6 +503,9 @@ class TauriEngine implements Engine {
       if (path === null) return null;
       await invoke("open_file", { path });
       return path;
+    },
+    async startup() {
+      return invoke<string | null>("startup_file");
     },
     async save(path, sheet) {
       let target = path ?? (await save({ filters: [XLSX_FILTER, CSV_FILTER], defaultPath: "Sem título.xlsx" }));

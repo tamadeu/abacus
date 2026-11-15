@@ -13,6 +13,7 @@ import {
   type StyleProperty,
 } from "./engine";
 import { CHART_HANDLE, drawChart, type Box } from "./chart-draw";
+import { setupChartOptions } from "./chart-panel";
 import { setupConditionalPanel } from "./conditional";
 import { setupPivotPanel } from "./pivot";
 import { setupValidationPanel } from "./validation";
@@ -1809,6 +1810,22 @@ async function settleChanges(): Promise<boolean> {
   return choice === "discard" || !modified;
 }
 
+/** Põe a interface no estado de uma pasta recém-aberta de `path`. */
+function adoptOpened(path: string) {
+  // Um CSV vira uma pasta nova: salvar pede um nome .xlsx, e o CSV de
+  // origem fica como estava.
+  const imported = path.toLowerCase().endsWith(".csv");
+  filePath = imported ? null : path;
+  modified = false;
+  copiedMark = null;
+  positions = new Map();
+  sheet = 0;
+  pos = newPosition();
+  selectedChart = null;
+  closeChartPanel();
+  statusEl.textContent = "Pronto";
+}
+
 async function openFile() {
   const files = engine.files;
   if (!files) return;
@@ -1817,18 +1834,7 @@ async function openFile() {
     if (!(await settleChanges())) return;
     const path = await files.open();
     if (path === null) return;
-    // Um CSV vira uma pasta nova: salvar pede um nome .xlsx, e o CSV de
-    // origem fica como estava.
-    const imported = path.toLowerCase().endsWith(".csv");
-    filePath = imported ? null : path;
-    modified = false;
-    copiedMark = null;
-    positions = new Map();
-    sheet = 0;
-    pos = newPosition();
-    selectedChart = null;
-    closeChartPanel();
-    statusEl.textContent = "Pronto";
+    adoptOpened(path);
     syncDocument();
     await loadSheets();
     await refresh();
@@ -1997,6 +2003,7 @@ async function saveChart(chart: ChartInfo) {
   try {
     const saved = await engine.updateChart(chart);
     charts = charts.map((one) => (one.id === saved.id ? saved : one));
+    if (panelChart === saved.id) chartOptions.fill(saved);
     statusEl.textContent = "Pronto";
     markModified();
     chartError.hidden = true;
@@ -2068,6 +2075,8 @@ function openChartPanel(chart: ChartInfo) {
   chartRange.value = rangeText(chart.range);
   chartError.hidden = true;
   chartPanel.hidden = false;
+  chartOptions.forget();
+  chartOptions.fill(chart);
   const area = canvas.getBoundingClientRect();
   const box = chartBox(chart);
   const width = chartPanel.offsetWidth;
@@ -2091,6 +2100,8 @@ async function changeChart(patch: (chart: ChartInfo) => ChartInfo | null) {
   const updated = patch({ ...chart });
   if (updated) await saveChart(updated);
 }
+
+const chartOptions = setupChartOptions({ change: (patch) => void changeChart(patch) });
 
 chartTitle.addEventListener("change", () => void changeChart((chart) => ({ ...chart, title: chartTitle.value.trim() })));
 chartKindSelect.addEventListener("change", () => void changeChart((chart) => ({ ...chart, kind: chartKindSelect.value as ChartKind })));
@@ -2774,4 +2785,10 @@ new ResizeObserver(() => void refresh()).observe(wrap);
 
 syncDocument();
 canvas.focus();
-void loadSheets().then(refresh);
+void (async () => {
+  const started = await engine.files?.startup?.();
+  if (started) adoptOpened(started);
+  syncDocument();
+  await loadSheets();
+  await refresh();
+})();
