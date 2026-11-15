@@ -47,6 +47,11 @@ Projeto no início. O que já funciona:
   transferência do sistema recebe e aceita texto separado por tabulações,
   para trocar dados com outros programas.
 - Desfazer e refazer (Ctrl+Z, Ctrl+Y).
+- Faixa de opções em abas, como no Excel: Página Inicial (área de
+  transferência, fonte, alinhamento e número), Inserir (linhas e colunas),
+  Dados (classificar, filtrar, localizar e substituir) e Exibir (congelar
+  painéis, ocultar e reexibir). O menu do botão direito ficou só com o que
+  se usa direto na célula.
 - Localizar e substituir (Ctrl+F e Ctrl+H): sem diferenciar maiúsculas, nas
   células com o texto digitado ou mostrado, com as encontradas destacadas, e
   "Substituir tudo" desfeito num passo só. Fórmulas só são alteradas no que

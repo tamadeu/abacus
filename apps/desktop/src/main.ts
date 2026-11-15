@@ -2010,6 +2010,13 @@ for (const input of [findQuery, replaceText]) {
   });
 }
 $("#find-btn").addEventListener("click", () => void write().then((written) => written && openFind()));
+$("#replace-btn").addEventListener("click", () =>
+  void write().then((written) => {
+    if (!written) return;
+    openFind();
+    replaceText.focus();
+  }),
+);
 $("#find-next").addEventListener("click", () => void findStep(true));
 $("#find-prev").addEventListener("click", () => void findStep(false));
 $("#find-close").addEventListener("click", closeFind);
@@ -2114,22 +2121,57 @@ window.addEventListener("keydown", (event) => {
   if (event.key === "Escape") closeMenu();
 });
 
-menu.addEventListener("click", (event) => {
-  const action = (event.target as HTMLElement).closest<HTMLElement>("[data-action]")?.dataset.action;
-  if (!action) return;
-  closeMenu();
-  canvas.focus();
+/** Executa uma ação do menu de contexto ou da faixa de opções; `at` é onde abrir o painel de filtro. */
+function runAction(action: string, at: { left: number; top: number }) {
   if (action === "cut" || action === "copy") void copySelection(action === "cut");
   else if (action === "paste") void pasteAtSelection();
   else if (action === "sort-asc" || action === "sort-desc") void sortSelection(action === "sort-desc");
-  else if (action === "filter") void openFilter(menuAt.left, menuAt.top);
+  else if (action === "filter") void openFilter(at.left, at.top);
   else if (action === "clear-filter") void clearFilter();
   else if (action === "hide-rows" || action === "show-rows") void setHidden("rows", action === "hide-rows");
   else if (action === "hide-cols" || action === "show-cols") void setHidden("cols", action === "hide-cols");
   else if (action === "freeze") void freezeAtSelection();
   else if (action === "unfreeze") void change("descongelar", () => engine.setFrozen(sheet, 0, 0));
   else void changeStructure(action);
+}
+
+menu.addEventListener("click", (event) => {
+  const action = (event.target as HTMLElement).closest<HTMLElement>("[data-action]")?.dataset.action;
+  if (!action) return;
+  closeMenu();
+  canvas.focus();
+  runAction(action, menuAt);
 });
+
+// Faixa de opções: os botões agem sobre a seleção, como o menu de contexto.
+$("#toolbar").addEventListener("click", (event) => {
+  const button = (event.target as HTMLElement).closest<HTMLElement>("[data-action]");
+  if (!button?.dataset.action) return;
+  const box = button.getBoundingClientRect();
+  canvas.focus();
+  runAction(button.dataset.action, { left: box.left, top: box.bottom + 4 });
+});
+
+/** Mostra o painel da aba escolhida e esconde os demais. */
+function selectTab(tab: HTMLElement, focus = false) {
+  for (const other of document.querySelectorAll<HTMLElement>("[data-tab]")) {
+    const selected = other === tab;
+    other.setAttribute("aria-selected", String(selected));
+    other.tabIndex = selected ? 0 : -1;
+    $(`#panel-${other.dataset.tab}`).hidden = !selected;
+  }
+  if (focus) tab.focus();
+}
+const tabs = [...document.querySelectorAll<HTMLElement>("[data-tab]")];
+for (const tab of tabs) {
+  tab.addEventListener("click", () => selectTab(tab));
+  tab.addEventListener("keydown", (event) => {
+    const shift = event.key === "ArrowRight" ? 1 : event.key === "ArrowLeft" ? -1 : 0;
+    if (shift === 0) return;
+    event.preventDefault();
+    selectTab(tabs[(tabs.indexOf(tab) + shift + tabs.length) % tabs.length], true);
+  });
+}
 
 $("#open-btn").addEventListener("click", () => void openFile());
 $("#save-btn").addEventListener("click", () => void saveFile(false));

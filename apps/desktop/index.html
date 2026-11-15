@@ -15,9 +15,6 @@
         <h1 id="doc-name">Sem título</h1>
         <p id="doc-state"></p>
       </div>
-      <div class="actions">
-        <button type="button" id="find-btn" title="Localizar e substituir (Ctrl+F)">Localizar</button>
-      </div>
       <div class="actions" id="file-actions">
         <button type="button" id="open-btn">Abrir</button>
         <button type="button" id="save-btn">Salvar</button>
@@ -25,7 +22,18 @@
       </div>
     </header>
 
-    <div class="toolbar" id="toolbar" role="toolbar" aria-label="Formatação">
+    <div id="toolbar">
+    <div class="tabs" role="tablist" aria-label="Faixa de opções">
+      <button type="button" role="tab" id="tab-home" data-tab="home" aria-controls="panel-home" aria-selected="true">Página Inicial</button>
+      <button type="button" role="tab" id="tab-insert" data-tab="insert" aria-controls="panel-insert" aria-selected="false" tabindex="-1">Inserir</button>
+      <button type="button" role="tab" id="tab-data" data-tab="data" aria-controls="panel-data" aria-selected="false" tabindex="-1">Dados</button>
+      <button type="button" role="tab" id="tab-view" data-tab="view" aria-controls="panel-view" aria-selected="false" tabindex="-1">Exibir</button>
+    </div>
+    <div class="toolbar" id="panel-home" role="tabpanel" aria-labelledby="tab-home">
+      <button type="button" data-action="cut" title="Recortar (Ctrl+X)">Recortar</button>
+      <button type="button" data-action="copy" title="Copiar (Ctrl+C)">Copiar</button>
+      <button type="button" data-action="paste" title="Colar (Ctrl+V)">Colar</button>
+      <span class="separator" aria-hidden="true"></span>
       <button type="button" data-toggle="bold" aria-label="Negrito" title="Negrito (Ctrl+B)"><b>N</b></button>
       <button type="button" data-toggle="italic" aria-label="Itálico" title="Itálico (Ctrl+I)"><i>I</i></button>
       <button type="button" data-toggle="underline" aria-label="Sublinhado" title="Sublinhado (Ctrl+U)"><u>S</u></button>
@@ -41,7 +49,7 @@
         Fundo
         <input type="color" id="fill-color" aria-label="Cor de fundo" />
       </label>
-      <button type="button" id="no-fill" title="Remover a cor de fundo">Sem cor</button>
+      <button type="button" id="no-fill" aria-label="Remover a cor de fundo" title="Remover a cor de fundo">✕</button>
       <span class="separator" aria-hidden="true"></span>
       <button type="button" data-align="left" aria-label="Alinhar à esquerda" title="Alinhar à esquerda">
         <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 6h16M4 12h10M4 18h14" /></svg>
@@ -75,6 +83,39 @@
       <button type="button" data-format="#,##0.00" title="Número com duas casas">0,00</button>
       <button type="button" data-format='"R$" #,##0.00' title="Moeda">R$</button>
       <button type="button" data-format="0.00%" title="Porcentagem">%</button>
+    </div>
+
+    <div class="toolbar" id="panel-insert" role="tabpanel" aria-labelledby="tab-insert" hidden>
+      <button type="button" data-action="insert-row-above">Linha acima</button>
+      <button type="button" data-action="insert-row-below">Linha abaixo</button>
+      <button type="button" data-action="delete-rows">Excluir linhas</button>
+      <span class="separator" aria-hidden="true"></span>
+      <button type="button" data-action="insert-col-left">Coluna à esquerda</button>
+      <button type="button" data-action="insert-col-right">Coluna à direita</button>
+      <button type="button" data-action="delete-cols">Excluir colunas</button>
+    </div>
+
+    <div class="toolbar" id="panel-data" role="tabpanel" aria-labelledby="tab-data" hidden>
+      <button type="button" data-action="sort-asc" title="Classificar pela coluna da célula ativa, de A a Z">Classificar A→Z</button>
+      <button type="button" data-action="sort-desc" title="Classificar pela coluna da célula ativa, de Z a A">Classificar Z→A</button>
+      <span class="separator" aria-hidden="true"></span>
+      <button type="button" data-action="filter" title="Escolher os valores a mostrar na coluna da célula ativa">Filtrar</button>
+      <button type="button" data-action="clear-filter" title="Reexibir as linhas da tabela">Limpar filtro</button>
+      <span class="separator" aria-hidden="true"></span>
+      <button type="button" id="find-btn" title="Localizar (Ctrl+F)">Localizar</button>
+      <button type="button" id="replace-btn" title="Localizar e substituir (Ctrl+H)">Substituir</button>
+    </div>
+
+    <div class="toolbar" id="panel-view" role="tabpanel" aria-labelledby="tab-view" hidden>
+      <button type="button" data-action="freeze" title="Congelar as linhas acima e as colunas à esquerda da célula ativa">Congelar painéis</button>
+      <button type="button" data-action="unfreeze">Descongelar</button>
+      <span class="separator" aria-hidden="true"></span>
+      <button type="button" data-action="hide-rows">Ocultar linhas</button>
+      <button type="button" data-action="show-rows">Reexibir linhas</button>
+      <span class="separator" aria-hidden="true"></span>
+      <button type="button" data-action="hide-cols">Ocultar colunas</button>
+      <button type="button" data-action="show-cols">Reexibir colunas</button>
+    </div>
     </div>
 
     <div class="formula-bar">
@@ -118,14 +159,6 @@
       <button type="button" role="menuitem" data-scope="col" data-action="delete-cols">Excluir colunas</button>
       <button type="button" role="menuitem" data-scope="col" data-tables data-action="hide-cols">Ocultar colunas</button>
       <button type="button" role="menuitem" data-scope="col" data-tables data-action="show-cols">Reexibir colunas</button>
-      <hr data-scope="col" data-tables />
-      <button type="button" role="menuitem" data-scope="col" data-tables data-action="sort-asc">Classificar de A a Z</button>
-      <button type="button" role="menuitem" data-scope="col" data-tables data-action="sort-desc">Classificar de Z a A</button>
-      <button type="button" role="menuitem" data-scope="col" data-tables data-action="filter">Filtrar esta coluna…</button>
-      <button type="button" role="menuitem" data-scope="col" data-tables data-action="clear-filter">Limpar filtro</button>
-      <hr data-tables />
-      <button type="button" role="menuitem" data-tables data-action="freeze">Congelar até aqui</button>
-      <button type="button" role="menuitem" data-tables data-action="unfreeze">Descongelar</button>
     </div>
 
     <div id="filter" role="dialog" aria-labelledby="filter-title" hidden>
