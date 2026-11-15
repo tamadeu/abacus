@@ -151,6 +151,53 @@ body {
   cursor: pointer;
 }
 
+#suggest li {
+  display: flex;
+  align-items: baseline;
+  gap: 14px;
+  justify-content: space-between;
+}
+
+.suggest-doc {
+  max-width: 280px;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+#fn-hint {
+  position: fixed;
+  z-index: 10;
+  max-width: 440px;
+  padding: 7px 11px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+  box-shadow: 0 8px 24px rgba(27, 27, 41, 0.16);
+  font-size: 12px;
+}
+
+#fn-hint[hidden] {
+  display: none;
+}
+
+.fn-sig {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 13px;
+}
+
+.fn-arg {
+  font-weight: 700;
+  color: #3730a3;
+}
+
+.fn-doc {
+  margin-top: 3px;
+  color: var(--muted);
+}
+
 #suggest li[aria-selected="true"] {
   background: #e7e5fb;
   color: #3730a3;

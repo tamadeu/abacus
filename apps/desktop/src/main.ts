@@ -15,6 +15,7 @@ import {
 import { CHART_HANDLE, drawChart, type Box } from "./chart-draw";
 import { setupChartOptions } from "./chart-panel";
 import { setupConditionalPanel } from "./conditional";
+import { FUNCTION_HELP, argIndex, callAt } from "./function-help";
 import { setupPivotPanel } from "./pivot";
 import { setupValidationPanel } from "./validation";
 import FUNCTIONS from "./functions.json";
@@ -871,7 +872,41 @@ function stopEdit() {
 const plain = (text: string) => text.normalize("NFD").replace(/\p{M}/gu, "").toUpperCase();
 const FUNCTION_KEYS = FUNCTIONS.map((name) => [plain(name), name] as const);
 
+const hint = $("#fn-hint");
+
+/** Mostra a assinatura da função em que o cursor está, com o argumento atual em destaque. */
+function updateHint(input: HTMLInputElement) {
+  const call = callAt(input.value, input.selectionStart ?? input.value.length);
+  const name = call?.name.toUpperCase() ?? "";
+  const help = FUNCTION_HELP[name];
+  if (!call || !help || suggestion) {
+    hint.hidden = true;
+    return;
+  }
+  const current = argIndex(help.args, call.arg);
+  const head = document.createElement("div");
+  head.className = "fn-sig";
+  head.append(`${call.name.toUpperCase()}(`);
+  help.args.forEach((arg, position) => {
+    if (position > 0) head.append("; ");
+    const part = document.createElement("span");
+    part.textContent = arg;
+    if (position === current) part.className = "fn-arg";
+    head.append(part);
+  });
+  head.append(")");
+  const doc = document.createElement("div");
+  doc.className = "fn-doc";
+  doc.textContent = help.doc;
+  hint.replaceChildren(head, doc);
+  const bounds = input.getBoundingClientRect();
+  hint.hidden = false;
+  hint.style.left = `${Math.max(0, Math.min(bounds.left, window.innerWidth - hint.offsetWidth - 8))}px`;
+  hint.style.top = `${bounds.bottom + 4}px`;
+}
+
 function closeSuggestions() {
+  hint.hidden = true;
   suggestion = null;
   suggest.hidden = true;
 }
@@ -909,6 +944,13 @@ function renderSuggestions() {
       item.setAttribute("role", "option");
       item.setAttribute("aria-selected", String(position === index));
       item.textContent = name;
+      const help = FUNCTION_HELP[name.toUpperCase()];
+      if (help) {
+        const note = document.createElement("span");
+        note.className = "suggest-doc";
+        note.textContent = help.doc;
+        item.append(note);
+      }
       // `mousedown` e não `click`, para o campo não perder o foco.
       item.addEventListener("mousedown", (event) => {
         event.preventDefault();
@@ -2549,8 +2591,11 @@ editor.addEventListener("input", () => {
   dirty = true;
   pointing = null;
   updateSuggestions(editor);
+  updateHint(editor);
   draw();
 });
+editor.addEventListener("keyup", () => updateHint(editor));
+editor.addEventListener("click", () => updateHint(editor));
 
 editor.addEventListener("keydown", (event) => {
   const moves: Record<string, [number, number]> = {
@@ -2585,8 +2630,11 @@ fx.addEventListener("input", () => {
   pointing = null;
   if (editMode !== null) editor.value = fx.value;
   updateSuggestions(fx);
+  updateHint(fx);
   draw();
 });
+fx.addEventListener("keyup", () => updateHint(fx));
+fx.addEventListener("click", () => updateHint(fx));
 
 // Os intervalos da fórmula aparecem coloridos enquanto a barra tem o foco.
 fx.addEventListener("focus", draw);

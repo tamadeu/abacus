@@ -113,7 +113,8 @@ Limitações conhecidas:
 - Zoom de 50% a 300% (Ctrl + roda, Ctrl +/−/0 ou o controle no rodapé); não é guardado no arquivo.
 - CSV não guarda formatação nem várias planilhas.
 - As referências coloridas aparecem na grade, mas não no texto da fórmula.
-- A lista de funções sugere só os nomes, sem descrição nem argumentos.
+- A ajuda das funções (descrição na lista e assinatura com o argumento atual em
+  destaque) existe só para as cerca de cem mais usadas; as outras mostram só o nome.
 - Clicar para inserir referência só funciona dentro da mesma planilha.
 - Colar para outros programas leva só os valores, sem formatação.
 - O tipo de fonte do arquivo ainda não aparece na grade.
