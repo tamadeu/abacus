@@ -212,6 +212,20 @@ pub struct CellView {
     /// Ausente quando a célula usa o estilo padrão.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub style: Option<CellStyle>,
+    /// Barra de dados da formatação condicional, se a célula tem uma.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bar: Option<DataBarView>,
+}
+
+/// Uma barra de dados: onde ela começa e termina, de 0 a 1 da largura da célula.
+#[derive(Debug, PartialEq, Serialize)]
+pub struct DataBarView {
+    /// Posição do valor.
+    pub value: f64,
+    /// Posição do zero.
+    pub axis: f64,
+    /// Cor da barra, como `#RRGGBB`.
+    pub color: String,
 }
 
 #[derive(Debug, PartialEq, Eq, Serialize)]
@@ -298,7 +312,7 @@ struct Copied {
 
 /// A pasta de trabalho aberta.
 pub struct Engine {
-    model: UserModel<'static>,
+    pub(crate) model: UserModel<'static>,
     copied: Option<Copied>,
     /// Gráficos de todas as planilhas; o motor não os conhece.
     charts: Vec<Chart>,
@@ -475,7 +489,11 @@ impl Engine {
         if range.col + range.cols > MAX_COLS as u32 || range.row + range.rows > MAX_ROWS as u32 {
             return Err("o intervalo do gráfico passa do limite da planilha".into());
         }
-        if chart.to_col < chart.from_col || chart.to_row < chart.from_row || chart.to_col >= MAX_COLS as u32 || chart.to_row >= MAX_ROWS as u32 {
+        if chart.to_col < chart.from_col
+            || chart.to_row < chart.from_row
+            || chart.to_col >= MAX_COLS as u32
+            || chart.to_row >= MAX_ROWS as u32
+        {
             return Err("a posição do gráfico é inválida".into());
         }
         Ok(())
@@ -975,8 +993,19 @@ impl Engine {
     fn cell_view(&self, sheet: u32, row: i32, col: i32) -> Result<Option<CellView>, String> {
         let input = self.model.get_cell_content(sheet, row, col)?;
         let display = self.model.get_formatted_cell_value(sheet, row, col)?;
-        let style = self.cell_style(&self.model.get_cell_style(sheet, row, col)?);
-        if input.is_empty() && display.is_empty() && style.is_none() {
+        // O estilo já traz o que a formatação condicional muda (cores, negrito).
+        let extended = self.model.get_extended_cell_style(sheet, row, col)?;
+        let style = self.cell_style(&extended.style);
+        let bar = extended.data_bar.as_ref().map(|bar| DataBarView {
+            value: bar.value,
+            axis: bar.axis_position,
+            color: self.model.resolve_color(if bar.value >= bar.axis_position {
+                &bar.positive_color
+            } else {
+                &bar.negative_color
+            }),
+        });
+        if input.is_empty() && display.is_empty() && style.is_none() && bar.is_none() {
             return Ok(None);
         }
         let kind = match self.model.get_cell_type(sheet, row, col)? {
@@ -984,7 +1013,7 @@ impl Engine {
             CellType::ErrorValue => CellKind::Error,
             _ => CellKind::Text,
         };
-        Ok(Some(CellView { col: (col - 1) as u32, row: (row - 1) as u32, input, display, kind, style }))
+        Ok(Some(CellView { col: (col - 1) as u32, row: (row - 1) as u32, input, display, kind, style, bar }))
     }
 
     /// Mescla o intervalo numa célula só, centralizada, como o "Mesclar e
@@ -2343,12 +2372,28 @@ mod tests {
     #[test]
     fn chart_data_splits_categories_series_and_header() {
         let e = engine(&[
-            (0, 0, "Mês"), (1, 0, "Vendas"), (2, 0, "Custos"),
-            (0, 1, "Jan"), (1, 1, "10"), (2, 1, "4"),
-            (0, 2, "Fev"), (1, 2, "20,5"), (2, 2, "6"),
+            (0, 0, "Mês"),
+            (1, 0, "Vendas"),
+            (2, 0, "Custos"),
+            (0, 1, "Jan"),
+            (1, 1, "10"),
+            (2, 1, "4"),
+            (0, 2, "Fev"),
+            (1, 2, "20,5"),
+            (2, 2, "6"),
         ]);
         let all = Range { col: 0, row: 0, cols: 3, rows: 3 };
-        let data = e.data_of(&Chart { id: 1, sheet: 0, kind: ChartKind::Column, title: String::new(), range: all, from_col: 4, from_row: 0, to_col: 8, to_row: 9 });
+        let data = e.data_of(&Chart {
+            id: 1,
+            sheet: 0,
+            kind: ChartKind::Column,
+            title: String::new(),
+            range: all,
+            from_col: 4,
+            from_row: 0,
+            to_col: 8,
+            to_row: 9,
+        });
         assert_eq!(data.categories, ["Jan", "Fev"]);
         assert_eq!(data.series.len(), 2);
         assert_eq!(data.series[0].name, "Vendas");
@@ -2357,14 +2402,25 @@ mod tests {
 
         // Só números: sem categorias nem títulos, as séries têm nome próprio.
         let e = engine(&[(0, 0, "1"), (1, 0, "2"), (0, 1, "3"), (1, 1, "4")]);
-        let data = e.data_of(&Chart { id: 1, sheet: 0, kind: ChartKind::Line, title: String::new(), range: Range { col: 0, row: 0, cols: 2, rows: 2 }, from_col: 4, from_row: 0, to_col: 8, to_row: 9 });
+        let data = e.data_of(&Chart {
+            id: 1,
+            sheet: 0,
+            kind: ChartKind::Line,
+            title: String::new(),
+            range: Range { col: 0, row: 0, cols: 2, rows: 2 },
+            from_col: 4,
+            from_row: 0,
+            to_col: 8,
+            to_row: 9,
+        });
         assert_eq!(data.categories, ["1", "2"]);
         assert_eq!(data.series.iter().map(|s| s.name.as_str()).collect::<Vec<_>>(), ["Série 1", "Série 2"]);
     }
 
     #[test]
     fn charts_are_created_validated_updated_and_deleted() {
-        let mut e = engine(&[(0, 0, "Mês"), (1, 0, "Vendas"), (0, 1, "Jan"), (1, 1, "10"), (0, 2, "Fev"), (1, 2, "20")]);
+        let mut e =
+            engine(&[(0, 0, "Mês"), (1, 0, "Vendas"), (0, 1, "Jan"), (1, 1, "10"), (0, 2, "Fev"), (1, 2, "20")]);
         let range = Range { col: 0, row: 0, cols: 2, rows: 3 };
         let view = e.add_chart(0, ChartKind::Bar, range).unwrap();
         // Uma série com título vira o título do gráfico; o gráfico fica ao lado dos dados.
@@ -2392,9 +2448,15 @@ mod tests {
     #[test]
     fn charts_survive_saving_and_reopening() {
         let mut e = engine(&[
-            (0, 0, "Mês"), (1, 0, "Vendas"), (2, 0, "Custos"),
-            (0, 1, "Jan"), (1, 1, "10"), (2, 1, "4"),
-            (0, 2, "Fev"), (1, 2, "20"), (2, 2, "6"),
+            (0, 0, "Mês"),
+            (1, 0, "Vendas"),
+            (2, 0, "Custos"),
+            (0, 1, "Jan"),
+            (1, 1, "10"),
+            (2, 1, "4"),
+            (0, 2, "Fev"),
+            (1, 2, "20"),
+            (2, 2, "6"),
         ]);
         let range = Range { col: 0, row: 0, cols: 3, rows: 3 };
         for kind in [ChartKind::Column, ChartKind::Bar, ChartKind::Line, ChartKind::Pie] {
@@ -2420,8 +2482,16 @@ mod tests {
         fs::remove_file(&again).unwrap();
 
         for engine in [&reopened, &twice] {
-            let first: Vec<_> = engine.charts(0).into_iter().map(|v| (v.chart.kind, v.chart.title, v.chart.range, v.chart.from_col, v.chart.to_col, v.chart.to_row)).collect();
-            let expected: Vec<_> = e.charts(0).into_iter().map(|v| (v.chart.kind, v.chart.title, v.chart.range, v.chart.from_col, v.chart.to_col, v.chart.to_row)).collect();
+            let first: Vec<_> = engine
+                .charts(0)
+                .into_iter()
+                .map(|v| (v.chart.kind, v.chart.title, v.chart.range, v.chart.from_col, v.chart.to_col, v.chart.to_row))
+                .collect();
+            let expected: Vec<_> = e
+                .charts(0)
+                .into_iter()
+                .map(|v| (v.chart.kind, v.chart.title, v.chart.range, v.chart.from_col, v.chart.to_col, v.chart.to_row))
+                .collect();
             assert_eq!(first, expected);
             assert_eq!(engine.charts(second).len(), 1);
             assert_eq!(engine.charts(second)[0].chart.range, Range { col: 0, row: 0, cols: 1, rows: 2 });
@@ -2441,6 +2511,108 @@ mod tests {
         e.delete_sheet(0).unwrap();
         assert_eq!(e.charts(0).len(), 1);
         assert_eq!(e.charts(0)[0].chart.kind, ChartKind::Line);
+    }
+
+    fn rule(range: &str, kind: crate::conditional::CondKind, value: &str) -> crate::conditional::CondRule {
+        crate::conditional::CondRule {
+            index: None,
+            range: range.into(),
+            kind,
+            value: value.into(),
+            value2: String::new(),
+            fill: Some("#FFC7CE".into()),
+            color: Some("#9C0006".into()),
+            mid: None,
+            bold: true,
+        }
+    }
+
+    #[test]
+    fn conditional_rules_paint_cells_and_roundtrip() {
+        use crate::conditional::CondKind;
+        let mut e = engine(&[(0, 0, "10"), (0, 1, "20,5"), (0, 2, "30"), (0, 3, "texto")]);
+        e.add_cond_rule(0, rule("A1:A4", CondKind::Greater, "15")).unwrap();
+        // Só o que passa de 15 ganha cor de fundo, cor de texto e negrito.
+        assert!(cell(&e, 0, 0).unwrap().style.is_none());
+        let painted = cell(&e, 0, 1).unwrap().style.unwrap();
+        assert_eq!((painted.fill.as_deref(), painted.color.as_deref(), painted.bold), (Some("#FFC7CE"), Some("#9C0006"), true));
+        assert!(cell(&e, 0, 2).unwrap().style.unwrap().bold);
+
+        let rules = e.cond_rules(0).unwrap();
+        assert_eq!(rules.len(), 1);
+        assert_eq!((rules[0].kind, rules[0].value.as_str(), rules[0].range.as_str()), (CondKind::Greater, "15", "A1:A4"));
+        assert_eq!(rules[0].fill.as_deref(), Some("#FFC7CE"));
+
+        // Trocar a regra repinta; o resultado sobrevive a salvar e abrir.
+        let mut changed = rules[0].clone();
+        changed.kind = CondKind::Less;
+        changed.value = "15".into();
+        e.update_cond_rule(0, changed).unwrap();
+        assert!(cell(&e, 0, 0).unwrap().style.unwrap().bold);
+        assert!(cell(&e, 0, 1).unwrap().style.is_none());
+
+        let path = temp_xlsx("cond");
+        e.save(&path).unwrap();
+        let reopened = Engine::open(&path).unwrap();
+        fs::remove_file(&path).unwrap();
+        let again = reopened.cond_rules(0).unwrap();
+        assert_eq!((again[0].kind, again[0].value.as_str()), (CondKind::Less, "15"));
+        assert_eq!(cell(&reopened, 0, 0).unwrap().style.unwrap().fill.as_deref(), Some("#FFC7CE"));
+
+        e.delete_cond_rule(0, 0).unwrap();
+        assert!(e.cond_rules(0).unwrap().is_empty());
+        assert!(cell(&e, 0, 0).unwrap().style.is_none());
+    }
+
+    #[test]
+    fn conditional_rules_cover_text_between_scales_and_bars() {
+        use crate::conditional::CondKind;
+        let mut e = engine(&[(0, 0, "10"), (0, 1, "20"), (0, 2, "30"), (1, 0, "Recife"), (1, 1, "Olinda")]);
+        let mut between = rule("A1:A3", CondKind::Between, "15");
+        between.value2 = "25".into();
+        e.add_cond_rule(0, between).unwrap();
+        assert!(cell(&e, 0, 0).unwrap().style.is_none());
+        assert!(cell(&e, 0, 1).unwrap().style.unwrap().bold);
+        assert_eq!(e.cond_rules(0).unwrap()[0].value2, "25");
+
+        e.add_cond_rule(0, rule("B1:B2", CondKind::Contains, "rec")).unwrap();
+        assert!(cell(&e, 1, 0).unwrap().style.unwrap().bold);
+        assert!(cell(&e, 1, 1).unwrap().style.is_none());
+
+        let mut scale = rule("A1:A3", CondKind::ColorScale, "");
+        scale.color = Some("#FFFFFF".into());
+        scale.fill = Some("#FF0000".into());
+        e.add_cond_rule(0, scale.clone()).unwrap();
+        assert_eq!(cell(&e, 0, 0).unwrap().style.and_then(|s| s.fill).as_deref(), Some("#FFFFFF"));
+        assert_eq!(cell(&e, 0, 2).unwrap().style.and_then(|s| s.fill).as_deref(), Some("#FF0000"));
+
+        let mut bars = rule("A1:A3", CondKind::DataBar, "");
+        bars.fill = Some("#638EC6".into());
+        e.add_cond_rule(0, bars).unwrap();
+        let bar = cell(&e, 0, 2).unwrap().bar.unwrap();
+        assert_eq!((bar.value, bar.axis, bar.color.as_str()), (1.0, 0.0, "#638EC6"));
+        let first = cell(&e, 0, 0).unwrap().bar.unwrap();
+        assert!((first.value - 1.0 / 3.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn conditional_rules_reject_bad_input() {
+        use crate::conditional::CondKind;
+        let mut e = engine(&[(0, 0, "1")]);
+        assert!(e.add_cond_rule(0, rule("A1", CondKind::Greater, "")).is_err());
+        assert!(e.add_cond_rule(0, rule("A1", CondKind::Between, "1")).is_err());
+        assert!(e.add_cond_rule(0, rule("not a range", CondKind::Greater, "1")).is_err());
+        assert!(e.add_cond_rule(0, rule("A1", CondKind::Top, "0")).is_err());
+        assert!(e.add_cond_rule(0, rule("A1", CondKind::Other, "")).is_err());
+        let mut no_look = rule("A1", CondKind::Greater, "1");
+        (no_look.fill, no_look.color, no_look.bold) = (None, None, false);
+        assert!(e.add_cond_rule(0, no_look).is_err());
+        let mut bad = rule("A1", CondKind::Greater, "1");
+        bad.fill = Some("vermelho".into());
+        assert!(e.add_cond_rule(0, bad).is_err());
+        assert!(e.update_cond_rule(0, rule("A1", CondKind::Greater, "1")).is_err());
+        assert!(e.delete_cond_rule(0, 7).is_err());
+        assert!(e.cond_rules(0).unwrap().is_empty());
     }
 
     #[test]

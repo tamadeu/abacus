@@ -25,6 +25,11 @@ Projeto no início. O que já funciona:
   mover, use a alça do canto para redimensionar, Delete para apagar; dois
   cliques (ou botão direito) abrem título, tipo e intervalo de dados. Vão para
   o `.xlsx` como gráficos nativos do Excel e voltam ao abrir o arquivo.
+- Formatação condicional (aba Dados): regras de valor (maior, menor, igual,
+  entre…), de texto (contém, começa com…), duplicados, únicos, vazias, acima ou
+  abaixo da média, maiores e menores, escalas de duas ou três cores e barras
+  de dados. Dá para criar, editar e excluir; a regra entra no desfazer e é
+  gravada no `.xlsx` como a do Excel.
 - Barra de status com média, contagem e soma da seleção.
 - A coluna alarga sozinha quando o número digitado não cabe.
 - Atalhos de navegação: Ctrl+setas, Ctrl+Home, Ctrl+End, Home, PageUp e
@@ -91,6 +96,9 @@ Limitações conhecidas:
 - Clicar para inserir referência só funciona dentro da mesma planilha.
 - Colar para outros programas leva só os valores, sem formatação.
 - O tipo de fonte do arquivo ainda não aparece na grade.
+- Formatação condicional: regras por fórmula, por período e conjuntos de ícones
+  continuam no arquivo, mas o Abacus não as desenha nem edita (só exclui as
+  que ele não edita); "10 maiores" é só por posição, não por porcentagem.
 - Gráficos: só colunas, barras, linhas e pizza (os de outros tipos, como
   dispersão ou área, somem ao salvar); ficam presos a células, então não
   acompanham linhas e colunas inseridas ou excluídas; criar, mover ou apagar
@@ -143,7 +151,7 @@ cargo test
 
 1. Propor o português do Brasil ao IronCalc original.
 2. Versão web com o motor em WebAssembly.
-3. Formatação condicional, validação de dados e tabelas dinâmicas.
+3. Validação de dados e tabelas dinâmicas.
 
 ## Licença
 

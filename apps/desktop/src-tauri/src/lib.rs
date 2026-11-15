@@ -2,15 +2,17 @@
 //! motor de planilhas para a interface por meio de comandos do Tauri.
 
 mod charts;
+mod conditional;
 mod engine;
 
 use std::path::PathBuf;
 use std::sync::Mutex;
 
 use charts::{Chart, ChartKind};
+use conditional::CondRule;
 use engine::{
-    Axis, BorderKind, CellPos, ChartView, Direction, Engine, FillAxis, FilterOptions, Range, SheetInfo, Stats, Structure,
-    StyleProperty, View,
+    Axis, BorderKind, CellPos, ChartView, Direction, Engine, FillAxis, FilterOptions, Range, SheetInfo, Stats,
+    Structure, StyleProperty, View,
 };
 use tauri::{AppHandle, State};
 use tauri_plugin_clipboard_manager::ClipboardExt;
@@ -276,6 +278,30 @@ fn export_csv(state: State<'_, AppState>, sheet: u32, path: String) -> Result<()
     state.with(|engine| engine.save_csv(sheet, &path))
 }
 
+/// Regras de formatação condicional de uma planilha.
+#[tauri::command]
+fn list_cond_rules(state: State<'_, AppState>, sheet: u32) -> Result<Vec<CondRule>, String> {
+    state.with(|engine| engine.cond_rules(sheet))
+}
+
+/// Cria uma regra de formatação condicional.
+#[tauri::command]
+fn add_cond_rule(state: State<'_, AppState>, sheet: u32, rule: CondRule) -> Result<(), String> {
+    state.with(|engine| engine.add_cond_rule(sheet, rule))
+}
+
+/// Troca uma regra de formatação condicional.
+#[tauri::command]
+fn update_cond_rule(state: State<'_, AppState>, sheet: u32, rule: CondRule) -> Result<(), String> {
+    state.with(|engine| engine.update_cond_rule(sheet, rule))
+}
+
+/// Apaga uma regra de formatação condicional.
+#[tauri::command]
+fn delete_cond_rule(state: State<'_, AppState>, sheet: u32, index: u32) -> Result<(), String> {
+    state.with(|engine| engine.delete_cond_rule(sheet, index))
+}
+
 /// O bloco de dados contínuo em volta de uma célula.
 #[tauri::command]
 fn data_region(state: State<'_, AppState>, sheet: u32, col: u32, row: u32) -> Result<Range, String> {
@@ -354,6 +380,10 @@ pub fn run() {
             set_border,
             change_structure,
             fill_cells,
+            list_cond_rules,
+            add_cond_rule,
+            update_cond_rule,
+            delete_cond_rule,
             data_region,
             list_charts,
             add_chart,

@@ -108,6 +108,8 @@
       <button type="button" data-action="filter" title="Escolher os valores a mostrar na coluna da célula ativa">Filtrar</button>
       <button type="button" data-action="clear-filter" title="Reexibir as linhas da tabela">Limpar filtro</button>
       <span class="separator" aria-hidden="true"></span>
+      <button type="button" data-action="cond-open" title="Pintar células segundo regras: maior que, duplicados, escala de cor, barras de dados…">Formatação condicional</button>
+      <span class="separator" aria-hidden="true"></span>
       <button type="button" id="find-btn" title="Localizar (Ctrl+F)">Localizar</button>
       <button type="button" id="replace-btn" title="Localizar e substituir (Ctrl+H)">Substituir</button>
     </div>
@@ -195,6 +197,35 @@
         <button type="button" id="chart-delete">Excluir</button>
         <button type="button" id="chart-close" class="primary">Fechar</button>
       </div>
+    </div>
+
+    <div id="cond-panel" role="dialog" aria-labelledby="cond-title" hidden>
+      <strong id="cond-title">Formatação condicional</strong>
+      <ul id="cond-list"></ul>
+      <fieldset>
+        <legend id="cond-form-title">Nova regra</legend>
+        <label>Células <input id="cond-range" type="text" autocomplete="off" placeholder="A1:B5" /></label>
+        <label>
+          Regra
+          <select id="cond-kind"></select>
+        </label>
+        <div class="cond-values">
+          <input id="cond-value" type="text" autocomplete="off" />
+          <input id="cond-value2" type="text" autocomplete="off" />
+        </div>
+        <div class="cond-colors">
+          <label data-cond-look="format scale"><span id="cond-color-label">Texto</span><input id="cond-color" type="color" /></label>
+          <label data-cond-look="scale"><span><input id="cond-use-mid" type="checkbox" /> Meio</span><input id="cond-mid" type="color" /></label>
+          <label><span id="cond-fill-label">Fundo</span><input id="cond-fill" type="color" /></label>
+          <label data-cond-look="format" class="cond-bold"><input id="cond-bold" type="checkbox" /> Negrito</label>
+        </div>
+        <p id="cond-error" role="alert" hidden></p>
+        <div class="filter-actions">
+          <button type="button" id="cond-cancel" hidden>Cancelar edição</button>
+          <button type="button" id="cond-save" class="primary">Adicionar regra</button>
+        </div>
+      </fieldset>
+      <div class="filter-actions"><button type="button" id="cond-close">Fechar</button></div>
     </div>
 
     <ul id="suggest" role="listbox" aria-label="Funções" hidden></ul>

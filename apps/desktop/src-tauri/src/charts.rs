@@ -158,7 +158,8 @@ fn reference(sheet_name: &str, col: u32, row: u32, cols: u32, rows: u32) -> Stri
 }
 
 fn str_cache(values: &[String]) -> String {
-    let points: String = values.iter().enumerate().map(|(i, v)| format!("<c:pt idx=\"{i}\"><c:v>{}</c:v></c:pt>", escape(v))).collect();
+    let points: String =
+        values.iter().enumerate().map(|(i, v)| format!("<c:pt idx=\"{i}\"><c:v>{}</c:v></c:pt>", escape(v))).collect();
     format!("<c:strCache><c:ptCount val=\"{}\"/>{points}</c:strCache>", values.len())
 }
 
@@ -168,7 +169,10 @@ fn num_cache(values: &[Option<f64>]) -> String {
         .enumerate()
         .filter_map(|(i, v)| v.map(|v| format!("<c:pt idx=\"{i}\"><c:v>{v}</c:v></c:pt>")))
         .collect();
-    format!("<c:numCache><c:formatCode>General</c:formatCode><c:ptCount val=\"{}\"/>{points}</c:numCache>", values.len())
+    format!(
+        "<c:numCache><c:formatCode>General</c:formatCode><c:ptCount val=\"{}\"/>{points}</c:numCache>",
+        values.len()
+    )
 }
 
 fn fill(color: &str) -> String {
@@ -237,7 +241,10 @@ fn chart_xml(chart: &Chart, data: &ChartData, sheet_name: &str) -> String {
 
     let text_style = "<c:txPr><a:bodyPr/><a:lstStyle/><a:p><a:pPr><a:defRPr sz=\"900\"/></a:pPr><a:endParaRPr lang=\"pt-BR\"/></a:p></c:txPr>";
     let (plot, axes) = match chart.kind {
-        ChartKind::Pie => (format!("<c:pieChart><c:varyColors val=\"1\"/>{series_xml}<c:firstSliceAng val=\"0\"/></c:pieChart>"), String::new()),
+        ChartKind::Pie => (
+            format!("<c:pieChart><c:varyColors val=\"1\"/>{series_xml}<c:firstSliceAng val=\"0\"/></c:pieChart>"),
+            String::new(),
+        ),
         kind => {
             let (cat_pos, val_pos) = if kind == ChartKind::Bar { ("l", "b") } else { ("b", "l") };
             let body = match kind {
@@ -293,7 +300,9 @@ fn drawing_xml(charts: &[&Chart]) -> String {
             )
         })
         .collect();
-    format!("{XML_DECLARATION}\n<xdr:wsDr xmlns:xdr=\"{NS_SHEET_DRAWING}\" xmlns:a=\"{NS_DRAWING}\">{anchors}</xdr:wsDr>")
+    format!(
+        "{XML_DECLARATION}\n<xdr:wsDr xmlns:xdr=\"{NS_SHEET_DRAWING}\" xmlns:a=\"{NS_DRAWING}\">{anchors}</xdr:wsDr>"
+    )
 }
 
 fn relationships(items: &[(String, &str, String)]) -> String {
@@ -301,7 +310,9 @@ fn relationships(items: &[(String, &str, String)]) -> String {
         .iter()
         .map(|(id, kind, target)| format!("<Relationship Id=\"{id}\" Type=\"{kind}\" Target=\"{target}\"/>"))
         .collect();
-    format!("{XML_DECLARATION}\n<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">{body}</Relationships>")
+    format!(
+        "{XML_DECLARATION}\n<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">{body}</Relationships>"
+    )
 }
 
 /// Acrescenta os gráficos a um `.xlsx` gravado pelo motor. `sheet_names` está
@@ -358,14 +369,18 @@ pub fn write_into(xlsx: Vec<u8>, sheet_names: &[String], charts: &[(Chart, Chart
         parts.push((sheet_part, sheet_xml.into_bytes()));
 
         let rels_part = format!("xl/worksheets/_rels/sheet{number}.xml.rels");
-        let link = format!("<Relationship Id=\"{DRAWING_REL_ID}\" Type=\"{REL_DRAWING}\" Target=\"../drawings/drawing{number}.xml\"/>");
+        let link = format!(
+            "<Relationship Id=\"{DRAWING_REL_ID}\" Type=\"{REL_DRAWING}\" Target=\"../drawings/drawing{number}.xml\"/>"
+        );
         let rels = match take(&mut parts, &rels_part) {
             Some(mut existing) => {
                 let at = existing.rfind("</Relationships>").ok_or("relações inválidas")?;
                 existing.insert_str(at, &link);
                 existing
             }
-            None => format!("{XML_DECLARATION}\n<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">{link}</Relationships>"),
+            None => format!(
+                "{XML_DECLARATION}\n<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">{link}</Relationships>"
+            ),
         };
         parts.push((rels_part, rels.into_bytes()));
     }
@@ -428,7 +443,8 @@ fn parse_xml(bytes: &[u8]) -> Option<Node> {
         let mut node = Node { name: element.local_name().as_ref().to_string(), ..Node::default() };
         for attr in element.attributes().flatten() {
             let key = attr.key.local_name().as_ref().to_string();
-            let value = attr.normalized_value(quick_xml::XmlVersion::default()).map(|v| v.into_owned()).unwrap_or_default();
+            let value =
+                attr.normalized_value(quick_xml::XmlVersion::default()).map(|v| v.into_owned()).unwrap_or_default();
             node.attrs.push((key, value));
         }
         node
@@ -504,14 +520,22 @@ fn parse_cell(text: &str) -> Option<(u32, u32)> {
     if letters.is_empty() || !letters.chars().all(|c| c.is_ascii_alphabetic()) {
         return None;
     }
-    let col = letters.to_ascii_uppercase().bytes().fold(0u32, |acc, b| acc.saturating_mul(26).saturating_add(u32::from(b - b'A') + 1)) - 1;
+    let col = letters
+        .to_ascii_uppercase()
+        .bytes()
+        .fold(0u32, |acc, b| acc.saturating_mul(26).saturating_add(u32::from(b - b'A') + 1))
+        - 1;
     Some((col, digits.parse::<u32>().ok()?.checked_sub(1)?))
 }
 
 /// Lê `'Nome'!$A$1:$B$3` como a planilha e o intervalo (colunas e linhas, inclusive).
 fn parse_reference(text: &str) -> Option<(String, (u32, u32, u32, u32))> {
     let (sheet, cells) = text.rsplit_once('!')?;
-    let sheet = sheet.strip_prefix('\'').and_then(|s| s.strip_suffix('\'')).map(|s| s.replace("''", "'")).unwrap_or_else(|| sheet.to_string());
+    let sheet = sheet
+        .strip_prefix('\'')
+        .and_then(|s| s.strip_suffix('\''))
+        .map(|s| s.replace("''", "'"))
+        .unwrap_or_else(|| sheet.to_string());
     let (first, last) = cells.split_once(':').unwrap_or((cells, cells));
     let (col1, row1) = parse_cell(first)?;
     let (col2, row2) = parse_cell(last)?;
@@ -552,12 +576,16 @@ fn read_inner(xlsx: &[u8], sheet_names: &[String]) -> Option<Vec<Chart>> {
     for sheet_node in &workbook.first("sheets")?.children {
         let name = sheet_node.attr("name")?;
         let Some(sheet) = sheet_names.iter().position(|n| n == name) else { continue };
-        let Some(target) = workbook_rels.iter().find(|(id, _, _)| Some(id.as_str()) == sheet_node.attr("id")).map(|r| r.2.clone()) else {
+        let Some(target) =
+            workbook_rels.iter().find(|(id, _, _)| Some(id.as_str()) == sheet_node.attr("id")).map(|r| r.2.clone())
+        else {
             continue;
         };
         let part = resolve("xl/workbook.xml", &target);
         let sheet_rels = rels_of(read(&rels_path(&part)));
-        let Some(drawing_target) = sheet_rels.iter().find(|r| r.1 == REL_DRAWING).map(|r| r.2.clone()) else { continue };
+        let Some(drawing_target) = sheet_rels.iter().find(|r| r.1 == REL_DRAWING).map(|r| r.2.clone()) else {
+            continue;
+        };
         let drawing_part = resolve(&part, &drawing_target);
         let Some(drawing) = read(&drawing_part).as_deref().and_then(parse_xml) else { continue };
         let drawing_rels = rels_of(read(&rels_path(&drawing_part)));
@@ -565,10 +593,14 @@ fn read_inner(xlsx: &[u8], sheet_names: &[String]) -> Option<Vec<Chart>> {
         for anchor in &drawing.children {
             let Some(frame) = anchor.first("chart") else { continue };
             let Some(rel_id) = frame.attr("id") else { continue };
-            let Some(chart_target) = drawing_rels.iter().find(|r| r.0 == rel_id && r.1 == REL_CHART).map(|r| r.2.clone()) else {
+            let Some(chart_target) =
+                drawing_rels.iter().find(|r| r.0 == rel_id && r.1 == REL_CHART).map(|r| r.2.clone())
+            else {
                 continue;
             };
-            let Some(chart_xml) = read(&resolve(&drawing_part, &chart_target)).as_deref().and_then(parse_xml) else { continue };
+            let Some(chart_xml) = read(&resolve(&drawing_part, &chart_target)).as_deref().and_then(parse_xml) else {
+                continue;
+            };
             let Some(chart) = read_chart(&chart_xml, anchor, name) else { continue };
             charts.push(Chart { id: charts.len() as u32 + 1, sheet: sheet as u32, ..chart });
         }
@@ -625,7 +657,10 @@ fn read_chart(chart_xml: &Node, anchor: &Node, sheet_name: &str) -> Option<Chart
     };
     let (from_col, from_row, _, _) = corner("from")?;
     let (to_col, to_row) = match corner("to") {
-        Some((col, row, col_off, row_off)) => (if col_off == 0 && col > from_col { col - 1 } else { col }, if row_off == 0 && row > from_row { row - 1 } else { row }),
+        Some((col, row, col_off, row_off)) => (
+            if col_off == 0 && col > from_col { col - 1 } else { col },
+            if row_off == 0 && row > from_row { row - 1 } else { row },
+        ),
         None => {
             let ext = anchor.child("ext")?;
             let size = |field: &str| ext.attr(field)?.parse::<u32>().ok();

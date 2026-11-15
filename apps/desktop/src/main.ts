@@ -12,6 +12,7 @@ import {
   type StyleProperty,
 } from "./engine";
 import { CHART_HANDLE, drawChart, type Box } from "./chart-draw";
+import { setupConditionalPanel } from "./conditional";
 import FUNCTIONS from "./functions.json";
 import { formulaRefs } from "./refs";
 
@@ -469,6 +470,21 @@ function draw() {
     const rect = rectOf(blockOf(cell));
     ctx.fillStyle = cell.style.fill;
     ctx.fillRect(rect.left + 1, rect.top + 1, rect.width, rect.height);
+  }
+
+  // Barras de dados: vão do zero até o valor, por cima do fundo e sob o texto.
+  for (const cell of cells.values()) {
+    if (!cell.bar || covered.has(key(cell.col, cell.row))) continue;
+    const rect = rectOf(blockOf(cell));
+    if (rect.width <= 4 || rect.height <= 4) continue;
+    const { value, axis, color } = cell.bar;
+    const from = rect.left + 1 + Math.min(value, axis) * (rect.width - 2);
+    const length = Math.max(1, Math.abs(value - axis) * (rect.width - 2));
+    const gradient = ctx.createLinearGradient(from, 0, from + length, 0);
+    gradient.addColorStop(0, color);
+    gradient.addColorStop(1, `${color}55`);
+    ctx.fillStyle = gradient;
+    ctx.fillRect(from, rect.top + 3, length, rect.height - 5);
   }
 
   // Células encontradas pelo "Localizar"
@@ -2517,6 +2533,7 @@ function runAction(action: string, at: { left: number; top: number }) {
   else if (action === "hide-rows" || action === "show-rows") void setHidden("rows", action === "hide-rows");
   else if (action === "hide-cols" || action === "show-cols") void setHidden("cols", action === "hide-cols");
   else if (action.startsWith("chart-")) void insertChart(action.slice(6) as ChartKind);
+  else if (action === "cond-open") void openConditional();
   else if (action === "freeze") void freezeAtSelection();
   else if (action === "unfreeze") void change("descongelar", () => engine.setFrozen(sheet, 0, 0));
   else void changeStructure(action);
@@ -2559,6 +2576,17 @@ for (const tab of tabs) {
     selectTab(tabs[(tabs.indexOf(tab) + shift + tabs.length) % tabs.length], true);
   });
 }
+
+// Painel de formatação condicional.
+const openConditional = setupConditionalPanel({
+  engine,
+  sheet: () => sheet,
+  selection: () => rangeText(selectedRange()),
+  changed: async () => {
+    markModified();
+    await refresh();
+  },
+});
 
 // Fechar a janela com alterações não salvas pergunta antes. Uma edição em
 // andamento entra no documento primeiro; se ela for inválida, as alterações

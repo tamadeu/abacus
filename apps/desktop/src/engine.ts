@@ -51,6 +51,60 @@ export interface CellView {
   kind: "number" | "text" | "error";
   /** Ausente quando a célula usa o estilo padrão. */
   style?: CellStyle;
+  /** Barra de dados da formatação condicional, se a célula tem uma. */
+  bar?: DataBar;
+}
+
+/** Barra de dados: onde começa e termina, de 0 a 1 da largura da célula. */
+export interface DataBar {
+  value: number;
+  axis: number;
+  color: string;
+}
+
+/** O que uma regra de formatação condicional testa. */
+export type CondKind =
+  | "greater"
+  | "greaterEqual"
+  | "less"
+  | "lessEqual"
+  | "equal"
+  | "notEqual"
+  | "between"
+  | "notBetween"
+  | "contains"
+  | "notContains"
+  | "beginsWith"
+  | "endsWith"
+  | "duplicates"
+  | "unique"
+  | "blanks"
+  | "notBlanks"
+  | "errors"
+  | "aboveAverage"
+  | "belowAverage"
+  | "top"
+  | "bottom"
+  | "colorScale"
+  | "dataBar"
+  | "other";
+
+/** Uma regra de formatação condicional. */
+export interface CondRule {
+  /** Posição da regra na planilha; `null` numa regra nova. */
+  index: number | null;
+  /** Células da regra, como `A1:B5`. */
+  range: string;
+  kind: CondKind;
+  value: string;
+  value2: string;
+  /** Fundo; cor da barra; ou, numa escala de cor, a do maior valor. */
+  fill: string | null;
+  /** Texto; ou, numa escala de cor, a do menor valor. */
+  color: string | null;
+  /** Cor do meio de uma escala de três cores. */
+  mid: string | null;
+  bold: boolean;
 }
 
 /** O pedaço de uma planilha que cabe na tela. */
@@ -273,6 +327,11 @@ export interface Engine {
   filterOptions(sheet: number, col: number, row: number): Promise<FilterOptions>;
   /** Mostra só as linhas do intervalo com um dos valores na coluna. Devolve quantas ficaram ocultas. */
   applyFilter(sheet: number, range: Range, col: number, allowed: string[]): Promise<number>;
+  /** Regras de formatação condicional da planilha, da de maior prioridade para a de menor. */
+  condRules(sheet: number): Promise<CondRule[]>;
+  addCondRule(sheet: number, rule: CondRule): Promise<void>;
+  updateCondRule(sheet: number, rule: CondRule): Promise<void>;
+  deleteCondRule(sheet: number, index: number): Promise<void>;
   /** O bloco de dados contínuo em volta da célula. */
   dataRegion(sheet: number, col: number, row: number): Promise<Range>;
   /** Gráficos da planilha. */
@@ -449,6 +508,22 @@ class TauriEngine implements Engine {
 
   applyFilter(sheet: number, range: Range, col: number, allowed: string[]): Promise<number> {
     return invoke("apply_filter", { sheet, range, col, allowed });
+  }
+
+  condRules(sheet: number): Promise<CondRule[]> {
+    return invoke("list_cond_rules", { sheet });
+  }
+
+  addCondRule(sheet: number, rule: CondRule): Promise<void> {
+    return invoke("add_cond_rule", { sheet, rule });
+  }
+
+  updateCondRule(sheet: number, rule: CondRule): Promise<void> {
+    return invoke("update_cond_rule", { sheet, rule });
+  }
+
+  deleteCondRule(sheet: number, index: number): Promise<void> {
+    return invoke("delete_cond_rule", { sheet, index });
   }
 
   dataRegion(sheet: number, col: number, row: number): Promise<Range> {
@@ -697,6 +772,18 @@ class PreviewEngine implements Engine {
   async applyFilter(): Promise<number> {
     return 0;
   }
+
+  async condRules(): Promise<CondRule[]> {
+    return [];
+  }
+
+  async addCondRule(): Promise<void> {
+    throw new Error("a pré-visualização não tem formatação condicional");
+  }
+
+  async updateCondRule(): Promise<void> {}
+
+  async deleteCondRule(): Promise<void> {}
 
   async dataRegion(_sheet: number, col: number, row: number): Promise<Range> {
     return { col, row, cols: 1, rows: 1 };
