@@ -373,6 +373,8 @@ export interface FileAccess {
    * ou `null` se a pessoa cancelou.
    */
   save(path: string | null, sheet: number): Promise<string | null>;
+  /** Pergunta onde gravar uma imagem PNG e a grava. Devolve o caminho, ou `null` se cancelou. */
+  saveImage?(png: Uint8Array, name: string): Promise<string | null>;
 }
 
 /**
@@ -522,6 +524,13 @@ class TauriEngine implements Engine {
       }
       if (!target.toLowerCase().endsWith(".xlsx")) target += ".xlsx";
       await invoke("save_file", { path: target });
+      return target;
+    },
+    async saveImage(png, name) {
+      let target = await save({ filters: [{ name: "Imagem PNG", extensions: ["png"] }], defaultPath: `${name}.png` });
+      if (target === null) return null;
+      if (!target.toLowerCase().endsWith(".png")) target += ".png";
+      await invoke("write_png", { path: target, bytes: Array.from(png) });
       return target;
     },
   };

@@ -287,6 +287,16 @@ fn startup_file(state: State<'_, AppState>) -> Option<String> {
     state.startup.lock().ok().and_then(|mut path| path.take())
 }
 
+/// Grava uma imagem PNG (um gráfico exportado).
+#[tauri::command]
+fn write_png(path: String, bytes: Vec<u8>) -> Result<(), String> {
+    const SIGNATURE: [u8; 8] = [0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a];
+    if !path.to_lowercase().ends_with(".png") || !bytes.starts_with(&SIGNATURE) {
+        return Err("só dá para gravar imagens PNG".into());
+    }
+    std::fs::write(&path, bytes).map_err(|e| format!("não foi possível gravar {path}: {e}"))
+}
+
 /// Grava uma planilha como CSV, sem alterar a pasta aberta.
 #[tauri::command]
 fn export_csv(state: State<'_, AppState>, sheet: u32, path: String) -> Result<(), String> {
@@ -516,6 +526,7 @@ pub fn run() {
             delete_pivot,
             data_region,
             list_charts,
+            write_png,
             add_chart,
             add_pivot_chart,
             update_chart,

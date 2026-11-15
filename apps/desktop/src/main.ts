@@ -2029,6 +2029,34 @@ async function removeChart(id: number) {
   await refresh();
 }
 
+/** Desenha o gráfico à parte, em 2x, e grava como PNG. */
+async function exportChartImage(chart: ChartInfo) {
+  const save = engine.files?.saveImage;
+  if (!save) {
+    statusEl.textContent = "Esta versão não grava imagens";
+    return;
+  }
+  const box = chartBox(chart);
+  const width = Math.max(320, Math.min(1600, Math.round(box?.width ?? 640)));
+  const height = Math.max(200, Math.min(1200, Math.round(box?.height ?? 400)));
+  const scale = 2;
+  const image = document.createElement("canvas");
+  image.width = width * scale;
+  image.height = height * scale;
+  const ctx = image.getContext("2d");
+  if (!ctx) return;
+  ctx.scale(scale, scale);
+  drawChart(ctx, chart, { left: 0, top: 0, width, height }, false);
+  try {
+    const blob = await new Promise<Blob | null>((done) => image.toBlob(done, "image/png"));
+    if (!blob) throw new Error("não foi possível gerar a imagem");
+    const path = await save.call(engine.files, new Uint8Array(await blob.arrayBuffer()), chart.title || "Gráfico");
+    statusEl.textContent = path ? `Imagem gravada em ${path}` : "Exportação cancelada";
+  } catch (error) {
+    statusEl.textContent = `Erro ao exportar a imagem: ${error}`;
+  }
+}
+
 /** Cria um gráfico com a seleção, ou com a tabela em volta da célula ativa. */
 async function insertChart(kind: ChartKind) {
   if (!(await write())) return;
@@ -2120,6 +2148,10 @@ chartRange.addEventListener("change", () =>
     return { ...chart, range };
   }),
 );
+$("#chart-image").addEventListener("click", () => {
+  const chart = charts.find((one) => one.id === panelChart);
+  if (chart) void exportChartImage(chart);
+});
 $("#chart-delete").addEventListener("click", () => {
   if (panelChart !== null) void removeChart(panelChart);
 });
