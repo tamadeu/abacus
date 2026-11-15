@@ -6,6 +6,7 @@ version = 4
 name = "abacus-desktop"
 version = "0.1.0"
 dependencies = [
+ "abacus-doc",
  "ironcalc",
  "quick-xml 0.42.0",
  "serde",
@@ -22,6 +23,8 @@ name = "abacus-doc"
 version = "0.1.0"
 dependencies = [
  "quick-xml 0.42.0",
+ "serde",
+ "serde_json",
  "zip",
 ]
 

@@ -15,6 +15,7 @@
         <h1 id="doc-name">Sem título</h1>
         <p id="doc-state"></p>
       </div>
+      <div class="actions"><button type="button" id="doc-btn" title="Abrir o editor de documentos">Documento</button></div>
       <div class="actions" id="file-actions">
         <button type="button" id="open-btn">Abrir</button>
         <button type="button" id="save-btn">Salvar</button>
@@ -333,5 +334,46 @@
       <span id="status" role="status">Pronto</span>
       <span id="zoom-box"><input id="zoom" type="range" min="50" max="300" step="10" value="100" aria-label="Zoom" /><span id="zoom-label" title="Dois cliques voltam a 100%">100%</span></span>
     </footer>
+
+    <div id="doc-app" hidden>
+      <header class="titlebar">
+        <div class="logo" aria-hidden="true">Á</div>
+        <div class="doc">
+          <h1 id="doc-title">Documento sem título</h1>
+          <p id="doc-info"></p>
+        </div>
+        <div class="actions">
+          <button type="button" id="doc-new">Novo</button>
+          <button type="button" id="doc-open">Abrir</button>
+          <button type="button" id="doc-save">Salvar</button>
+          <button type="button" id="doc-save-as">Salvar como</button>
+          <button type="button" id="doc-close">Voltar à planilha</button>
+        </div>
+      </header>
+      <div id="doc-bar" role="toolbar" aria-label="Formatação do texto">
+        <select id="doc-heading" aria-label="Estilo do parágrafo">
+          <option value="p">Texto normal</option>
+          <option value="h1">Título 1</option>
+          <option value="h2">Título 2</option>
+          <option value="h3">Título 3</option>
+        </select>
+        <button type="button" data-cmd="bold" title="Negrito (Ctrl+B)"><b>N</b></button>
+        <button type="button" data-cmd="italic" title="Itálico (Ctrl+I)"><i>I</i></button>
+        <button type="button" data-cmd="underline" title="Sublinhado (Ctrl+U)"><u>S</u></button>
+        <button type="button" data-cmd="strikeThrough" title="Tachado"><s>T</s></button>
+        <span class="sep"></span>
+        <button type="button" data-cmd="insertUnorderedList" title="Marcadores">• Lista</button>
+        <button type="button" data-cmd="insertOrderedList" title="Numeração">1. Lista</button>
+        <span class="sep"></span>
+        <button type="button" data-cmd="justifyLeft" title="Alinhar à esquerda">Esq.</button>
+        <button type="button" data-cmd="justifyCenter" title="Centralizar">Centro</button>
+        <button type="button" data-cmd="justifyRight" title="Alinhar à direita">Dir.</button>
+        <button type="button" data-cmd="justifyFull" title="Justificar">Just.</button>
+        <span class="sep"></span>
+        <button type="button" data-cmd="undo" title="Desfazer (Ctrl+Z)">Desfazer</button>
+        <button type="button" data-cmd="redo" title="Refazer (Ctrl+Y)">Refazer</button>
+      </div>
+      <div id="doc-scroll"><div id="doc-page" contenteditable="true" spellcheck="true" lang="pt-BR" aria-label="Texto do documento"></div></div>
+    </div>
   </body>
 </html>

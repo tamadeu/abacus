@@ -1,16 +1,18 @@
+use serde::{Deserialize, Serialize};
+
 /// Um documento: uma sequência de parágrafos.
-#[derive(Debug, Clone, PartialEq, Default)]
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 pub struct Document {
     pub blocks: Vec<Block>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Block {
     Paragraph(Paragraph),
 }
 
 /// O que um parágrafo é.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum ParaKind {
     #[default]
     Normal,
@@ -22,7 +24,7 @@ pub enum ParaKind {
     Numbered,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum Align {
     #[default]
     Left,
@@ -31,7 +33,7 @@ pub enum Align {
     Justify,
 }
 
-#[derive(Debug, Clone, PartialEq, Default)]
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 pub struct Paragraph {
     pub kind: ParaKind,
     pub align: Align,
@@ -39,7 +41,7 @@ pub struct Paragraph {
 }
 
 /// Um trecho de texto com a mesma formatação. `\n` é quebra de linha e `\t` é tabulação.
-#[derive(Debug, Clone, PartialEq, Default)]
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 pub struct Run {
     pub text: String,
     pub bold: bool,

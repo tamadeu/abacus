@@ -15,6 +15,7 @@ import {
 import { CHART_HANDLE, drawChart, type Box } from "./chart-draw";
 import { setupChartOptions } from "./chart-panel";
 import { setupConditionalPanel } from "./conditional";
+import { setupDocument } from "./doc";
 import { setupPivotPanel } from "./pivot";
 import { setupValidationPanel } from "./validation";
 import FUNCTIONS from "./functions.json";
@@ -2912,3 +2913,7 @@ void (async () => {
   await loadSheets();
   await refresh();
 })();
+
+// Editor de documentos de texto
+const documents = setupDocument();
+$("#doc-btn").addEventListener("click", () => void documents.show());

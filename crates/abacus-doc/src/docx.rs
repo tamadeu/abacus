@@ -399,6 +399,18 @@ mod tests {
     }
 
     #[test]
+    fn model_json_has_the_shape_the_editor_sends() {
+        let json = r#"{"blocks":[
+            {"Paragraph":{"kind":{"Heading":1},"align":"Left","runs":[{"text":"Oi","bold":true,"italic":false,"underline":false,"strike":false}]}},
+            {"Paragraph":{"kind":"Bullet","align":"Center","runs":[]}}]}"#;
+        let doc: Document = serde_json::from_str(json).unwrap();
+        let Block::Paragraph(first) = &doc.blocks[0];
+        assert_eq!(first.kind, ParaKind::Heading(1));
+        assert!(first.runs[0].bold);
+        assert_eq!(read_docx(&write_docx(&doc).unwrap()).unwrap(), doc);
+    }
+
+    #[test]
     fn rejects_files_that_are_not_docx() {
         assert!(read_docx(b"nao e zip").is_err());
     }

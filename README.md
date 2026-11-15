@@ -156,12 +156,24 @@ Limitações conhecidas:
   como `t="n"` sem valor; arquivos no formato que o Excel grava não têm o
   problema.
 
+## Documentos de texto (início)
+
+O botão "Documento" abre um editor de texto em tela cheia: títulos, negrito,
+itálico, sublinhado, tachado, listas com marcadores e numeradas, alinhamento,
+abrir e salvar `.docx`. O modelo (`crates/abacus-doc`) guarda só isso; imagens,
+tabelas (viram parágrafos), cabeçalhos, estilos personalizados, fontes e cores
+não são mantidos ao abrir um arquivo. Um `.docx` gravado pelo Abacus abre no
+LibreOffice. O editor usa edição de texto do próprio navegador embutido
+(`contenteditable`), então o desfazer e a seleção são os dele. Ainda não há
+zoom, páginas, impressão nem quebra de página.
+
 ## Estrutura
 
 | Pasta | Conteúdo |
 | --- | --- |
 | `apps/desktop/src` | Interface em TypeScript (Vite). |
 | `apps/desktop/src-tauri` | Casca Tauri. `engine.rs` é a ponte com o IronCalc. |
+| `crates/abacus-doc` | Modelo do documento de texto e leitura/gravação de `.docx`. |
 
 A interface fala com o motor apenas pela interface `Engine`
 (`apps/desktop/src/engine.ts`). Hoje ela chama comandos do Tauri; a versão web
