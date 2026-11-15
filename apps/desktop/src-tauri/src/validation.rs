@@ -266,23 +266,32 @@ impl Engine {
     pub fn add_validation(&mut self, sheet: u32, rule: Validation) -> Result<Validation, String> {
         let mut rule = self.check_rule(&Validation { sheet, ..rule })?;
         rule.id = self.validations.iter().map(|one| one.id).max().unwrap_or(0) + 1;
+        self.open_undo_step()?;
         self.validations.push(rule.clone());
+        self.note_state();
         Ok(rule)
     }
 
     pub fn update_validation(&mut self, sheet: u32, rule: Validation) -> Result<Validation, String> {
         let rule = self.check_rule(&Validation { sheet, ..rule })?;
-        let slot = self.validations.iter_mut().find(|one| one.id == rule.id).ok_or("a regra não existe mais")?;
-        *slot = rule.clone();
+        if !self.validations.iter().any(|one| one.id == rule.id) {
+            return Err("a regra não existe mais".into());
+        }
+        self.open_undo_step()?;
+        if let Some(slot) = self.validations.iter_mut().find(|one| one.id == rule.id) {
+            *slot = rule.clone();
+        }
+        self.note_state();
         Ok(rule)
     }
 
     pub fn delete_validation(&mut self, id: u32) -> Result<(), String> {
-        let before = self.validations.len();
-        self.validations.retain(|rule| rule.id != id);
-        if self.validations.len() == before {
+        if !self.validations.iter().any(|rule| rule.id == id) {
             return Err("a regra não existe mais".into());
         }
+        self.open_undo_step()?;
+        self.validations.retain(|rule| rule.id != id);
+        self.note_state();
         Ok(())
     }
 

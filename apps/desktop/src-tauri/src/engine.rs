@@ -315,13 +315,21 @@ pub struct Engine {
     pub(crate) model: UserModel<'static>,
     copied: Option<Copied>,
     /// Gráficos de todas as planilhas; o motor não os conhece.
-    charts: Vec<Chart>,
+    pub(crate) charts: Vec<Chart>,
     /// Regras de validação de dados; o motor não as conhece.
     pub(crate) validations: Vec<crate::validation::Validation>,
     /// Tabelas dinâmicas; o motor não as conhece.
     pub(crate) pivots: Vec<crate::pivot::Pivot>,
-    /// As tabelas dinâmicas em cada ponto do desfazer (profundidade → definições).
-    pub(crate) pivot_snaps: std::collections::BTreeMap<usize, Vec<crate::pivot::Pivot>>,
+    /// O que o motor não guarda (tabelas dinâmicas, gráficos, validações) em cada ponto do desfazer.
+    pub(crate) snaps: std::collections::BTreeMap<usize, Snapshot>,
+}
+
+/// O que o Abacus guarda fora do motor e que entra no desfazer.
+#[derive(Clone, Default)]
+pub(crate) struct Snapshot {
+    pub pivots: Vec<crate::pivot::Pivot>,
+    pub charts: Vec<Chart>,
+    pub validations: Vec<crate::validation::Validation>,
 }
 
 /// Um gráfico com os dados que ele mostra agora.
@@ -342,7 +350,7 @@ impl Engine {
             charts: Vec::new(),
             validations: Vec::new(),
             pivots: Vec::new(),
-            pivot_snaps: Default::default(),
+            snaps: Default::default(),
         })
     }
 
@@ -358,15 +366,13 @@ impl Engine {
             charts: Vec::new(),
             validations: Vec::new(),
             pivots: Vec::new(),
-            pivot_snaps: Default::default(),
+            snaps: Default::default(),
         };
         if let Ok(bytes) = fs::read(path) {
             engine.charts = charts::read_from(&bytes, &engine.sheet_names());
             engine.validations = crate::validation::read_from(&bytes, &engine.sheet_names());
             engine.pivots = crate::pivot_sheet::read_from(&bytes);
-            if !engine.pivots.is_empty() {
-                engine.pivot_snaps.insert(0, engine.pivots.clone());
-            }
+            engine.note_opened_state();
         }
         Ok(engine)
     }
@@ -550,7 +556,9 @@ impl Engine {
         if data.series.len() == 1 && data.has_header {
             chart.title = data.series[0].name.clone();
         }
+        self.open_undo_step()?;
         self.charts.push(chart.clone());
+        self.note_state();
         Ok(ChartView { chart, data })
     }
 
@@ -558,18 +566,25 @@ impl Engine {
     pub fn update_chart(&mut self, mut chart: Chart) -> Result<ChartView, String> {
         chart.normalize();
         self.check_chart(&chart)?;
-        let slot = self.charts.iter_mut().find(|c| c.id == chart.id).ok_or("o gráfico não existe mais")?;
-        *slot = chart.clone();
+        if !self.charts.iter().any(|c| c.id == chart.id) {
+            return Err("o gráfico não existe mais".into());
+        }
+        self.open_undo_step()?;
+        if let Some(slot) = self.charts.iter_mut().find(|c| c.id == chart.id) {
+            *slot = chart.clone();
+        }
+        self.note_state();
         Ok(ChartView { data: self.data_of(&chart), chart })
     }
 
     /// Apaga um gráfico.
     pub fn delete_chart(&mut self, id: u32) -> Result<(), String> {
-        let before = self.charts.len();
-        self.charts.retain(|chart| chart.id != id);
-        if self.charts.len() == before {
+        if !self.charts.iter().any(|chart| chart.id == id) {
             return Err("o gráfico não existe mais".into());
         }
+        self.open_undo_step()?;
+        self.charts.retain(|chart| chart.id != id);
+        self.note_state();
         Ok(())
     }
 
@@ -577,6 +592,12 @@ impl Engine {
     pub fn set_col_width(&mut self, sheet: u32, col: u32, width: f64) -> Result<(), String> {
         let (_, col) = to_ironcalc(col, 0)?;
         self.model.set_columns_width(sheet, col, col, check_size(width)?)
+    }
+
+    /// Abre um passo no desfazer sem mudar nada que se veja: regrava a largura de uma coluna como está.
+    pub(crate) fn open_undo_step(&mut self) -> Result<(), String> {
+        let width = self.model.get_column_width(0, 1).map_err(|e| e.to_string())?;
+        self.model.set_columns_width(0, 1, 1, width)
     }
 
     /// Define a altura de uma linha, em pixels.
@@ -595,7 +616,7 @@ impl Engine {
         self.refresh_pivots_fed_by(sheet, col, row);
         // A edição e as tabelas que ela refez voltam juntas no desfazer.
         self.model.group_undo_since(depth);
-        self.note_pivots();
+        self.note_state();
         Ok(())
     }
 
@@ -1272,7 +1293,7 @@ impl Engine {
     pub fn undo(&mut self) -> Result<(), String> {
         if self.model.can_undo() {
             self.model.undo()?;
-            self.restore_pivots();
+            self.restore_state();
         }
         Ok(())
     }
@@ -1281,7 +1302,7 @@ impl Engine {
     pub fn redo(&mut self) -> Result<(), String> {
         if self.model.can_redo() {
             self.model.redo()?;
-            self.restore_pivots();
+            self.restore_state();
         }
         Ok(())
     }
@@ -2578,6 +2599,32 @@ mod tests {
     }
 
     #[test]
+    fn charts_and_validations_follow_undo_redo() {
+        let mut e = engine(&[(0, 0, "A"), (0, 1, "1"), (0, 2, "2")]);
+        let range = Range { col: 0, row: 0, cols: 1, rows: 3 };
+        let view = e.add_chart(0, ChartKind::Column, range).unwrap();
+        assert_eq!(e.charts(0).len(), 1);
+        e.undo().unwrap();
+        assert_eq!(e.charts(0).len(), 0);
+        e.redo().unwrap();
+        assert_eq!(e.charts(0).len(), 1);
+
+        let mut changed = view.chart.clone();
+        changed.title = "Novo".into();
+        e.update_chart(changed).unwrap();
+        assert_eq!(e.charts(0)[0].chart.title, "Novo");
+        e.undo().unwrap();
+        assert_ne!(e.charts(0)[0].chart.title, "Novo");
+
+        e.delete_chart(view.chart.id).unwrap();
+        assert_eq!(e.charts(0).len(), 0);
+        e.undo().unwrap();
+        assert_eq!(e.charts(0).len(), 1);
+        e.redo().unwrap();
+        assert_eq!(e.charts(0).len(), 0);
+    }
+
+    #[test]
     fn chart_options_survive_xlsx() {
         use crate::chart_trend::{Trend, TrendKind};
         use crate::charts::{ChartOptions, LegendPos, SeriesStyle, Stacking};
@@ -3063,6 +3110,18 @@ mod tests {
         assert_eq!(e.pivots(sheet).len(), 1);
         e.delete_sheet(sheet).unwrap();
         assert!(e.pivots(0).is_empty() && e.pivots(sheet).is_empty());
+    }
+
+    #[test]
+    fn open_undo_step_adds_exactly_one_step() {
+        let mut e = engine(&[(0, 0, "a")]);
+        let before = e.model.undo_depth();
+        e.open_undo_step().unwrap();
+        assert_eq!(e.model.undo_depth(), before + 1);
+        let width = e.model.get_column_width(0, 1).unwrap();
+        e.undo().unwrap();
+        assert_eq!(e.model.undo_depth(), before);
+        assert_eq!(e.model.get_column_width(0, 1).unwrap(), width);
     }
 
     #[test]

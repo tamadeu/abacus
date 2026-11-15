@@ -3,7 +3,7 @@
 
 use ironcalc::base::cell::CellValue;
 
-use crate::engine::{Engine, Range, StyleProperty, area, to_ironcalc};
+use crate::engine::{Engine, Range, Snapshot, StyleProperty, area, to_ironcalc};
 use crate::package;
 use crate::pivot::{self, Field, Grid, Out, Pivot, Role, Source, SrcCell};
 use crate::validation::parse_range_text;
@@ -271,7 +271,7 @@ impl Engine {
         pivot.id = self.pivots.iter().map(|p| p.id).max().unwrap_or(0) + 1;
         let done = self.render_pivot(pivot, true)?;
         self.pivots.push(done.clone());
-        self.note_pivots();
+        self.note_state();
         Ok(done)
     }
 
@@ -282,7 +282,7 @@ impl Engine {
         let done = self.render_pivot(pivot, false)?;
         let slot = self.pivots.iter_mut().find(|p| p.id == done.id).ok_or("a tabela dinâmica não existe mais")?;
         *slot = done.clone();
-        self.note_pivots();
+        self.note_state();
         Ok(done)
     }
 
@@ -325,29 +325,44 @@ impl Engine {
         if clear && let Some(extent) = Self::pivot_extent(&pivot) {
             self.model.range_clear_all(&area(pivot.sheet, extent)?)?;
         }
-        self.note_pivots();
+        self.note_state();
         Ok(())
     }
 
-    /// Guarda as definições deste ponto do desfazer, descartando as de passos já refeitos.
-    pub(crate) fn note_pivots(&mut self) {
-        if self.pivots.is_empty() && self.pivot_snaps.is_empty() {
+    fn snapshot(&self) -> Snapshot {
+        Snapshot { pivots: self.pivots.clone(), charts: self.charts.clone(), validations: self.validations.clone() }
+    }
+
+    /// No arquivo recém-aberto, o que ele trouxe é o ponto de partida do desfazer.
+    pub(crate) fn note_opened_state(&mut self) {
+        let snap = self.snapshot();
+        if !(snap.pivots.is_empty() && snap.charts.is_empty() && snap.validations.is_empty()) {
+            self.snaps.insert(0, snap);
+        }
+    }
+
+    /// Guarda o estado deste ponto do desfazer, descartando o de passos já refeitos.
+    pub(crate) fn note_state(&mut self) {
+        let snap = self.snapshot();
+        if self.snaps.is_empty() && snap.pivots.is_empty() && snap.charts.is_empty() && snap.validations.is_empty() {
             return;
         }
         let depth = self.model.undo_depth();
-        self.pivot_snaps.retain(|k, _| *k < depth);
-        if self.pivot_snaps.is_empty() && depth > 0 {
-            // O que havia antes da primeira alteração: nada (ou o que o arquivo trouxe).
-            self.pivot_snaps.insert(0, Vec::new());
+        self.snaps.retain(|k, _| *k < depth);
+        if self.snaps.is_empty() && depth > 0 {
+            // Antes da primeira alteração não havia nada.
+            self.snaps.insert(0, Snapshot::default());
         }
-        self.pivot_snaps.insert(depth, self.pivots.clone());
+        self.snaps.insert(depth, snap);
     }
 
-    /// Depois de desfazer ou refazer, as definições voltam ao que eram naquele ponto.
-    pub(crate) fn restore_pivots(&mut self) {
+    /// Depois de desfazer ou refazer, tudo volta ao que era naquele ponto.
+    pub(crate) fn restore_state(&mut self) {
         let depth = self.model.undo_depth();
-        if let Some((_, snap)) = self.pivot_snaps.range(..=depth).next_back() {
-            self.pivots = snap.clone();
+        if let Some((_, snap)) = self.snaps.range(..=depth).next_back() {
+            self.pivots = snap.pivots.clone();
+            self.charts = snap.charts.clone();
+            self.validations = snap.validations.clone();
         }
     }
 
@@ -390,7 +405,7 @@ impl Engine {
 
     /// Tabelas de uma planilha excluída somem; as das seguintes sobem um índice.
     pub(crate) fn drop_pivots_of(&mut self, sheet: u32) {
-        self.pivot_snaps.clear();
+        self.snaps.clear();
         self.pivots.retain(|p| p.sheet != sheet && p.source_sheet != sheet);
         for p in &mut self.pivots {
             if p.sheet > sheet {

@@ -121,7 +121,7 @@ Limitações conhecidas:
   continuam no arquivo, mas o Abacus não as desenha nem edita (só exclui as
   que ele não edita); "10 maiores" é só por posição, não por porcentagem.
 - Validação de dados: só vale ao digitar (colar e preencher não conferem),
-  não entra no desfazer e não acompanha linhas e colunas inseridas; regras de
+  não acompanha linhas e colunas inseridas; regras de
   data, hora e fórmula somem ao salvar. Itens de lista não podem ter vírgula.
 - Tabelas dinâmicas: no `.xlsx` vão como tabela dinâmica nativa (cache, registros
   e definição; o Excel e o LibreOffice a refazem ao abrir), mais os valores já
@@ -135,7 +135,7 @@ Limitações conhecidas:
   origem nem sobre outra tabela. Ainda não há segmentação de dados, expandir e
   recolher grupos, nem detalhar uma célula.
 - Gráficos: ficam presos a células, então não acompanham linhas e colunas
-  inseridas ou excluídas; criar, mover ou apagar um gráfico não entra no
+  inseridas ou excluídas; criar, alterar e apagar um gráfico entram no
   desfazer. Os tipos que o Abacus não conhece (bolhas, radar, 3D…) somem ao
   salvar. O eixo secundário e o combinado valem para colunas, linhas e área;
   na pizza só a primeira série aparece, e a rosca mostra um anel por série.
