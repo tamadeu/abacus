@@ -30,6 +30,11 @@ Projeto no início. O que já funciona:
   abaixo da média, maiores e menores, escalas de duas ou três cores e barras
   de dados. Dá para criar, editar e excluir; a regra entra no desfazer e é
   gravada no `.xlsx` como a do Excel.
+- Validação de dados (aba Dados): lista suspensa (itens escritos ou um
+  intervalo), número inteiro, decimal e tamanho do texto, com condição
+  (entre, maior que…) e aviso próprio. Ao digitar, o valor recusado abre um
+  aviso e a célula continua em edição; a célula com lista mostra uma seta. As
+  regras vão para o `.xlsx` e voltam ao abrir.
 - Barra de status com média, contagem e soma da seleção.
 - A coluna alarga sozinha quando o número digitado não cabe.
 - Atalhos de navegação: Ctrl+setas, Ctrl+Home, Ctrl+End, Home, PageUp e
@@ -99,6 +104,9 @@ Limitações conhecidas:
 - Formatação condicional: regras por fórmula, por período e conjuntos de ícones
   continuam no arquivo, mas o Abacus não as desenha nem edita (só exclui as
   que ele não edita); "10 maiores" é só por posição, não por porcentagem.
+- Validação de dados: só vale ao digitar (colar e preencher não conferem),
+  não entra no desfazer e não acompanha linhas e colunas inseridas; regras de
+  data, hora e fórmula somem ao salvar. Itens de lista não podem ter vírgula.
 - Gráficos: só colunas, barras, linhas e pizza (os de outros tipos, como
   dispersão ou área, somem ao salvar); ficam presos a células, então não
   acompanham linhas e colunas inseridas ou excluídas; criar, mover ou apagar
@@ -151,7 +159,7 @@ cargo test
 
 1. Propor o português do Brasil ao IronCalc original.
 2. Versão web com o motor em WebAssembly.
-3. Validação de dados e tabelas dinâmicas.
+3. Tabelas dinâmicas.
 
 ## Licença
 

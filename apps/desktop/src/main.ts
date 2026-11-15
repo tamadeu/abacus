@@ -6,6 +6,7 @@ import {
   type ChartKind,
   type Direction,
   type FilterOptions,
+  type Validation,
   type Range,
   type SheetInfo,
   type Structure,
@@ -13,6 +14,7 @@ import {
 } from "./engine";
 import { CHART_HANDLE, drawChart, type Box } from "./chart-draw";
 import { setupConditionalPanel } from "./conditional";
+import { setupValidationPanel } from "./validation";
 import FUNCTIONS from "./functions.json";
 import { formulaRefs } from "./refs";
 
@@ -183,6 +185,8 @@ let found: Cell[] = [];
 let foundKeys = new Set<string>();
 /** Filtro que o painel está montando: a tabela, a coluna e os valores dela. */
 let filtering: FilterOptions | null = null;
+/** Regras de validação da planilha aberta, para a seta da lista suspensa. */
+let validations: Validation[] = [];
 /** Arquivo aberto, ou `null` para uma pasta nova. */
 let filePath: string | null = null;
 /** A pasta tem alterações que não estão no arquivo. */
@@ -425,6 +429,78 @@ function onChartHandle(chart: ChartInfo, px: number, py: number): boolean {
   return box !== null && px >= box.left + box.width - CHART_HANDLE - 3 && py >= box.top + box.height - CHART_HANDLE - 3;
 }
 
+/** A seta da lista suspensa, se a célula ativa tem uma regra de lista e está na tela. */
+function listArrow(): { left: number; top: number; size: number } | null {
+  if (editMode !== null || !singleSelection()) return null;
+  const { anchor } = pos;
+  const hit = validations.some((rule) => {
+    if (rule.kind !== "list") return false;
+    const area = parseRange(rule.range);
+    return (
+      area !== null &&
+      anchor.col >= area.col &&
+      anchor.col < area.col + area.cols &&
+      anchor.row >= area.row &&
+      anchor.row < area.row + area.rows
+    );
+  });
+  if (!hit || !colOnScreen(anchor.col) || !rowOnScreen(anchor.row)) return null;
+  const box = rectOf(blockOf(anchor));
+  const size = Math.min(18, box.height - 2);
+  if (size < 8 || box.width < size + 8) return null;
+  return { left: box.left + box.width - size - 1, top: box.top + box.height - size - 1, size };
+}
+
+const dvMenu = $("#dv-menu");
+const closeListMenu = () => {
+  dvMenu.hidden = true;
+};
+
+/** Abre a lista suspensa da célula ativa, logo abaixo dela. */
+async function openListMenu() {
+  const { anchor } = pos;
+  let items: string[] | null;
+  try {
+    items = await engine.listOptions(sheet, anchor.col, anchor.row);
+  } catch (error) {
+    statusEl.textContent = `Erro ao ler a lista: ${error}`;
+    return;
+  }
+  if (!items || items.length === 0) {
+    statusEl.textContent = "A lista não tem itens.";
+    return;
+  }
+  const current = cells.get(key(anchor.col, anchor.row))?.display ?? "";
+  dvMenu.replaceChildren(
+    ...items.map((item) => {
+      const option = document.createElement("li");
+      option.setAttribute("role", "option");
+      option.setAttribute("aria-selected", String(item === current));
+      option.textContent = item;
+      option.addEventListener("pointerdown", (event) => {
+        event.preventDefault();
+        closeListMenu();
+        void pickListItem(item);
+      });
+      return option;
+    }),
+  );
+  const bounds = canvas.getBoundingClientRect();
+  const box = rectOf(blockOf(anchor));
+  dvMenu.hidden = false;
+  dvMenu.style.minWidth = `${Math.max(140, box.width)}px`;
+  dvMenu.style.left = `${Math.max(0, Math.min(bounds.left + box.left, window.innerWidth - dvMenu.offsetWidth - 8))}px`;
+  dvMenu.style.top = `${Math.min(bounds.top + box.top + box.height + 2, window.innerHeight - dvMenu.offsetHeight - 8)}px`;
+}
+
+/** Grava na célula ativa o item escolhido na lista suspensa. */
+async function pickListItem(item: string) {
+  fx.value = item;
+  dirty = true;
+  if (await write()) await refresh();
+  canvas.focus();
+}
+
 function draw() {
   const width = wrap.clientWidth;
   const height = wrap.clientHeight;
@@ -604,6 +680,24 @@ function draw() {
     ctx.strokeStyle = COLORS.accent;
     ctx.lineWidth = 2;
     ctx.strokeRect(selLeft + 0.5, selTop + 0.5, selWidth, selHeight);
+  }
+
+  // Seta da lista suspensa na célula ativa
+  const arrow = listArrow();
+  if (arrow) {
+    ctx.fillStyle = "#fff";
+    ctx.fillRect(arrow.left, arrow.top, arrow.size, arrow.size);
+    ctx.strokeStyle = COLORS.accent;
+    ctx.lineWidth = 1;
+    ctx.strokeRect(arrow.left + 0.5, arrow.top + 0.5, arrow.size - 1, arrow.size - 1);
+    ctx.fillStyle = COLORS.accent;
+    ctx.beginPath();
+    const mid = arrow.left + arrow.size / 2;
+    const center = arrow.top + arrow.size / 2;
+    ctx.moveTo(mid - 4, center - 2);
+    ctx.lineTo(mid + 4, center - 2);
+    ctx.lineTo(mid, center + 3);
+    ctx.fill();
   }
 
   // Intervalos citados na fórmula em edição, cada um com uma cor
@@ -977,6 +1071,7 @@ async function refresh() {
     colX = edges(colWidths, HEADER_WIDTH);
     rowY = edges(rowHeights, HEADER_HEIGHT);
     charts = await engine.charts(sheet);
+    validations = await engine.validations(sheet);
     if (!charts.some((chart) => chart.id === selectedChart)) selectedChart = null;
     cells = new Map(view.cells.map((cell) => [key(cell.col, cell.row), cell]));
     merges = view.merges;
@@ -1108,7 +1203,13 @@ async function write(): Promise<boolean> {
     markModified();
     return true;
   } catch (error) {
-    statusEl.textContent = `Erro ao gravar a célula: ${error}`;
+    const text = String(error);
+    if (text.startsWith("Validação: ")) {
+      statusEl.textContent = text;
+      await engine.alert(text.slice("Validação: ".length));
+    } else {
+      statusEl.textContent = `Erro ao gravar a célula: ${text}`;
+    }
     return false;
   }
 }
@@ -2025,6 +2126,13 @@ canvas.addEventListener("pointerdown", (event) => {
     canvas.setPointerCapture(event.pointerId);
     return;
   }
+  // A seta da lista suspensa da célula ativa
+  const arrow = listArrow();
+  if (arrow && px >= arrow.left && px <= arrow.left + arrow.size && py >= arrow.top && py <= arrow.top + arrow.size) {
+    event.preventDefault();
+    void openListMenu();
+    return;
+  }
   // Um gráfico sob o mouse: seleciona e começa a mover, ou a redimensionar pela alça.
   const hit = px >= HEADER_WIDTH && py >= HEADER_HEIGHT ? chartAt(px, py) : null;
   if (hit) {
@@ -2516,11 +2624,15 @@ const closeMenu = () => {
 };
 document.addEventListener("pointerdown", (event) => {
   if (!menu.hidden && !menu.contains(event.target as Node)) closeMenu();
+  if (!dvMenu.hidden && !dvMenu.contains(event.target as Node)) closeListMenu();
   if (!filterPanel.hidden && !filterPanel.contains(event.target as Node)) closeFilter();
 });
 window.addEventListener("blur", closeMenu);
 window.addEventListener("keydown", (event) => {
-  if (event.key === "Escape") closeMenu();
+  if (event.key === "Escape") {
+    closeMenu();
+    closeListMenu();
+  }
 });
 
 /** Executa uma ação do menu de contexto ou da faixa de opções; `at` é onde abrir o painel de filtro. */
@@ -2534,6 +2646,7 @@ function runAction(action: string, at: { left: number; top: number }) {
   else if (action === "hide-cols" || action === "show-cols") void setHidden("cols", action === "hide-cols");
   else if (action.startsWith("chart-")) void insertChart(action.slice(6) as ChartKind);
   else if (action === "cond-open") void openConditional();
+  else if (action === "dv-open") void openValidation();
   else if (action === "freeze") void freezeAtSelection();
   else if (action === "unfreeze") void change("descongelar", () => engine.setFrozen(sheet, 0, 0));
   else void changeStructure(action);
@@ -2576,6 +2689,17 @@ for (const tab of tabs) {
     selectTab(tabs[(tabs.indexOf(tab) + shift + tabs.length) % tabs.length], true);
   });
 }
+
+// Painel de validação de dados.
+const openValidation = setupValidationPanel({
+  engine,
+  sheet: () => sheet,
+  selection: () => rangeText(selectedRange()),
+  changed: async () => {
+    markModified();
+    await refresh();
+  },
+});
 
 // Painel de formatação condicional.
 const openConditional = setupConditionalPanel({

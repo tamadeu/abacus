@@ -108,6 +108,7 @@
       <button type="button" data-action="filter" title="Escolher os valores a mostrar na coluna da célula ativa">Filtrar</button>
       <button type="button" data-action="clear-filter" title="Reexibir as linhas da tabela">Limpar filtro</button>
       <span class="separator" aria-hidden="true"></span>
+      <button type="button" data-action="dv-open" title="Limitar o que pode ser digitado: lista suspensa, números, tamanho do texto">Validação de dados</button>
       <button type="button" data-action="cond-open" title="Pintar células segundo regras: maior que, duplicados, escala de cor, barras de dados…">Formatação condicional</button>
       <span class="separator" aria-hidden="true"></span>
       <button type="button" id="find-btn" title="Localizar (Ctrl+F)">Localizar</button>
@@ -227,6 +228,50 @@
       </fieldset>
       <div class="filter-actions"><button type="button" id="cond-close">Fechar</button></div>
     </div>
+
+    <div id="dv-panel" role="dialog" aria-labelledby="dv-title" hidden>
+      <strong id="dv-title">Validação de dados</strong>
+      <ul id="dv-list"></ul>
+      <fieldset>
+        <legend id="dv-form-title">Nova regra</legend>
+        <label>Células <input id="dv-range" type="text" autocomplete="off" placeholder="A1:B5" /></label>
+        <label>
+          Permitir
+          <select id="dv-kind">
+            <option value="list">Lista</option>
+            <option value="whole">Número inteiro</option>
+            <option value="decimal">Número decimal</option>
+            <option value="textLength">Tamanho do texto</option>
+          </select>
+        </label>
+        <label id="dv-op-label">
+          Condição
+          <select id="dv-op">
+            <option value="between">entre</option>
+            <option value="notBetween">fora do intervalo</option>
+            <option value="equal">igual a</option>
+            <option value="notEqual">diferente de</option>
+            <option value="greater">maior que</option>
+            <option value="greaterEqual">maior ou igual a</option>
+            <option value="less">menor que</option>
+            <option value="lessEqual">menor ou igual a</option>
+          </select>
+        </label>
+        <div class="cond-values">
+          <input id="dv-value" type="text" autocomplete="off" />
+          <input id="dv-value2" type="text" autocomplete="off" />
+        </div>
+        <label>Aviso ao recusar (opcional) <input id="dv-message" type="text" autocomplete="off" /></label>
+        <p id="dv-error" role="alert" hidden></p>
+        <div class="filter-actions">
+          <button type="button" id="dv-cancel" hidden>Cancelar edição</button>
+          <button type="button" id="dv-save" class="primary">Adicionar regra</button>
+        </div>
+      </fieldset>
+      <div class="filter-actions"><button type="button" id="dv-close">Fechar</button></div>
+    </div>
+
+    <ul id="dv-menu" role="listbox" aria-label="Valores permitidos" hidden></ul>
 
     <ul id="suggest" role="listbox" aria-label="Funções" hidden></ul>
 

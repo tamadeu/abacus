@@ -89,6 +89,33 @@ export type CondKind =
   | "dataBar"
   | "other";
 
+export type ValidationKind = "list" | "whole" | "decimal" | "textLength";
+export type ValidationOp =
+  | "between"
+  | "notBetween"
+  | "equal"
+  | "notEqual"
+  | "greater"
+  | "greaterEqual"
+  | "less"
+  | "lessEqual";
+
+/** Uma regra de validação de dados. */
+export interface Validation {
+  /** 0 numa regra nova. */
+  id: number;
+  sheet: number;
+  /** Células da regra, como `A1:B5`. */
+  range: string;
+  kind: ValidationKind;
+  operator: ValidationOp;
+  /** O limite, ou a lista (`Sim; Não` ou `=A1:A5`). */
+  value: string;
+  value2: string;
+  /** Aviso mostrado ao recusar; vazio usa o padrão. */
+  message: string;
+}
+
 /** Uma regra de formatação condicional. */
 export interface CondRule {
   /** Posição da regra na planilha; `null` numa regra nova. */
@@ -328,6 +355,14 @@ export interface Engine {
   /** Mostra só as linhas do intervalo com um dos valores na coluna. Devolve quantas ficaram ocultas. */
   applyFilter(sheet: number, range: Range, col: number, allowed: string[]): Promise<number>;
   /** Regras de formatação condicional da planilha, da de maior prioridade para a de menor. */
+  validations(sheet: number): Promise<Validation[]>;
+  addValidation(sheet: number, rule: Validation): Promise<Validation>;
+  updateValidation(sheet: number, rule: Validation): Promise<Validation>;
+  deleteValidation(id: number): Promise<void>;
+  /** Itens da lista suspensa da célula, ou `null` se ela não tem uma. */
+  listOptions(sheet: number, col: number, row: number): Promise<string[] | null>;
+  /** Mostra um aviso ao usuário. */
+  alert(message: string): Promise<void>;
   condRules(sheet: number): Promise<CondRule[]>;
   addCondRule(sheet: number, rule: CondRule): Promise<void>;
   updateCondRule(sheet: number, rule: CondRule): Promise<void>;
@@ -508,6 +543,30 @@ class TauriEngine implements Engine {
 
   applyFilter(sheet: number, range: Range, col: number, allowed: string[]): Promise<number> {
     return invoke("apply_filter", { sheet, range, col, allowed });
+  }
+
+  validations(sheet: number): Promise<Validation[]> {
+    return invoke("list_validations", { sheet });
+  }
+
+  addValidation(sheet: number, rule: Validation): Promise<Validation> {
+    return invoke("add_validation", { sheet, rule });
+  }
+
+  updateValidation(sheet: number, rule: Validation): Promise<Validation> {
+    return invoke("update_validation", { sheet, rule });
+  }
+
+  deleteValidation(id: number): Promise<void> {
+    return invoke("delete_validation", { id });
+  }
+
+  listOptions(sheet: number, col: number, row: number): Promise<string[] | null> {
+    return invoke("list_options", { sheet, col, row });
+  }
+
+  async alert(text: string): Promise<void> {
+    await message(text, { title: "Abacus", kind: "warning" });
   }
 
   condRules(sheet: number): Promise<CondRule[]> {
@@ -771,6 +830,28 @@ class PreviewEngine implements Engine {
 
   async applyFilter(): Promise<number> {
     return 0;
+  }
+
+  async validations(): Promise<Validation[]> {
+    return [];
+  }
+
+  async addValidation(): Promise<Validation> {
+    throw new Error("a pré-visualização não tem validação de dados");
+  }
+
+  async updateValidation(): Promise<Validation> {
+    throw new Error("a pré-visualização não tem validação de dados");
+  }
+
+  async deleteValidation(): Promise<void> {}
+
+  async listOptions(): Promise<string[] | null> {
+    return null;
+  }
+
+  async alert(text: string): Promise<void> {
+    window.alert(text);
   }
 
   async condRules(): Promise<CondRule[]> {
