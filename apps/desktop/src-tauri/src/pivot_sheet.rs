@@ -119,7 +119,15 @@ impl Engine {
     }
 
     /// Escreve a grade da tabela e guarda a definição.
-    fn render_pivot(&mut self, mut pivot: Pivot, is_new: bool) -> Result<Pivot, String> {
+    fn render_pivot(&mut self, pivot: Pivot, is_new: bool) -> Result<Pivot, String> {
+        let depth = self.model.undo_depth();
+        let result = self.render_pivot_steps(pivot, is_new);
+        // Limpar, escrever e estilizar viram um só passo do desfazer.
+        self.model.group_undo_since(depth);
+        result
+    }
+
+    fn render_pivot_steps(&mut self, mut pivot: Pivot, is_new: bool) -> Result<Pivot, String> {
         let source = self.read_source(pivot.source_sheet, &pivot.source)?;
         let grid = pivot::compute(&pivot, &source)?;
         let (height, width) = (grid.cells.len(), grid.cells.first().map_or(0, Vec::len));
@@ -213,11 +221,17 @@ impl Engine {
         let cols = at.cols;
         let rows_of =
             |first: usize, count: usize| Range { col: at.col, row: at.row + first as u32, cols, rows: count as u32 };
-        let header = rows_of(0, grid.header_rows);
+        // Nomes dos filtros em negrito.
+        if grid.page_rows > 1 {
+            let names = Range { col: at.col, row: at.row, cols: 1, rows: grid.page_rows as u32 - 1 };
+            self.format(sheet, names, StyleProperty::Bold, "true")?;
+        }
+        let top = grid.page_rows;
+        let header = rows_of(top, grid.header_rows);
         self.format(sheet, header, StyleProperty::Bold, "true")?;
         self.format(sheet, header, StyleProperty::Fill, HEADER_FILL)?;
-        let body_rows = at.rows as usize - grid.header_rows;
-        for (i, role) in grid.row_roles.iter().enumerate().skip(grid.header_rows) {
+        let body_rows = at.rows as usize - top - grid.header_rows;
+        for (i, role) in grid.row_roles.iter().enumerate().skip(top + grid.header_rows) {
             let line = rows_of(i, 1);
             match role {
                 Role::Subtotal => self.format(sheet, line, StyleProperty::Bold, "true")?,
@@ -232,7 +246,7 @@ impl Engine {
             for (c, role) in grid.col_roles.iter().enumerate().skip(grid.label_cols) {
                 let column = Range {
                     col: at.col + c as u32,
-                    row: at.row + grid.header_rows as u32,
+                    row: at.row + (top + grid.header_rows) as u32,
                     cols: 1,
                     rows: body_rows as u32,
                 };
@@ -310,6 +324,57 @@ impl Engine {
             self.model.range_clear_all(&area(pivot.sheet, extent)?)?;
         }
         Ok(())
+    }
+
+    /// Desfazer a criação de uma tabela apaga a grade; a definição some junto.
+    pub(crate) fn forget_vanished_pivots(&mut self) {
+        let gone: Vec<u32> = self
+            .pivots
+            .iter()
+            .filter(|p| {
+                let Ok((r, c)) = to_ironcalc(p.col, p.row) else { return false };
+                p.width > 0 && self.model.get_cell_content(p.sheet, r, c).map(|text| text.is_empty()).unwrap_or(false)
+            })
+            .map(|p| p.id)
+            .collect();
+        self.pivots.retain(|p| !gone.contains(&p.id));
+    }
+
+    /// Acrescenta ao arquivo as tabelas no formato nativo do Excel.
+    pub(crate) fn write_native_pivots(&self, xlsx: Vec<u8>) -> Result<Vec<u8>, String> {
+        if self.pivots.is_empty() {
+            return Ok(xlsx);
+        }
+        let names = self.sheet_names();
+        let mut prepared = Vec::new();
+        for pivot in &self.pivots {
+            let Ok(source) = self.read_source(pivot.source_sheet, &pivot.source) else { continue };
+            let Ok(grid) = pivot::compute(pivot, &source) else { continue };
+            let Some(range) = parse_range_text(&pivot.source) else { continue };
+            let Some(source_sheet) = names.get(pivot.source_sheet as usize).cloned() else { continue };
+            // O Excel lê os nomes dos campos da primeira linha; ela precisa ter todos escritos.
+            let headers_written = (range.col..range.col + range.cols).all(|col| {
+                to_ironcalc(col, range.row).is_ok_and(|(r, c)| {
+                    self.model.get_formatted_cell_value(pivot.source_sheet, r, c).is_ok_and(|t| !t.trim().is_empty())
+                })
+            });
+            prepared.push((pivot, source, grid, source_sheet, headers_written));
+        }
+        let exports: Vec<crate::pivot_xlsx::Export> = prepared
+            .iter()
+            .map(|(pivot, source, grid, source_sheet, headers_written)| crate::pivot_xlsx::Export {
+                pivot,
+                source,
+                source_sheet: source_sheet.clone(),
+                page_rows: grid.page_rows,
+                header_rows: grid.header_rows,
+                label_cols: grid.label_cols,
+                height: grid.cells.len() - grid.page_rows,
+                width: grid.cells.first().map_or(0, Vec::len),
+                headers_written: *headers_written,
+            })
+            .collect();
+        crate::pivot_xlsx::write_into(xlsx, &names, &exports)
     }
 
     /// Tabelas de uma planilha excluída somem; as das seguintes sobem um índice.

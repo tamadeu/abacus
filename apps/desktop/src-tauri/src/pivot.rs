@@ -216,6 +216,8 @@ pub struct Grid {
     pub col_formats: Vec<Option<String>>,
     pub header_rows: usize,
     pub label_cols: usize,
+    /// Linhas no começo com os filtros e a linha em branco depois deles.
+    pub page_rows: usize,
 }
 
 // ---------------------------------------------------------------------------
@@ -638,6 +640,7 @@ pub fn compute(pivot: &Pivot, source: &Source) -> Result<Grid, String> {
             col_formats: vec![None],
             header_rows: 1,
             label_cols: 1,
+            page_rows: 0,
         });
     }
     // Sem valores não há o que cruzar: só a lista de itens das linhas.
@@ -867,8 +870,53 @@ pub fn compute(pivot: &Pivot, source: &Source) -> Result<Grid, String> {
         });
         cells.push(line);
     }
-    // Rótulos que repetem o do grupo acima só aparecem quando o grupo muda.
-    Ok(Grid { cells, row_roles, col_roles, col_formats, header_rows, label_cols })
+    // Os filtros aparecem acima da tabela, como no Excel.
+    let mut page_rows = 0;
+    if !pivot.filters.is_empty() {
+        let mut page: Vec<Vec<Out>> = Vec::new();
+        for filter in &pivot.filters {
+            let field = filter_field(pivot, filter);
+            let all = distinct_items(&field, source)?;
+            let hidden: HashSet<&String> = filter.hidden.iter().collect();
+            let visible: Vec<&String> = all.iter().filter(|item| !hidden.contains(item)).collect();
+            let summary = match visible.len() {
+                0 => "(Nenhum)".to_string(),
+                1 => visible[0].clone(),
+                n if n == all.len() => "(Tudo)".to_string(),
+                n => format!("{n} itens"),
+            };
+            let mut line = vec![Out::Empty; width.max(2)];
+            line[0] = Out::Text(filter.field.clone());
+            line[1] = Out::Text(summary);
+            page.push(line);
+        }
+        page.push(vec![Out::Empty; width.max(2)]);
+        page_rows = page.len();
+        for line in &mut cells {
+            line.resize(width.max(2), Out::Empty);
+        }
+        let mut roles = vec![Role::Body; page_rows];
+        roles.extend(row_roles);
+        row_roles = roles;
+        page.extend(cells);
+        cells = page;
+        col_roles.resize(width.max(2), Role::Body);
+        col_formats.resize(width.max(2), None);
+    }
+    Ok(Grid { cells, row_roles, col_roles, col_formats, header_rows, label_cols, page_rows })
+}
+
+/// O campo de um filtro, com o agrupamento que ele tem nas linhas ou colunas.
+fn filter_field(pivot: &Pivot, filter: &Filter) -> Field {
+    let used = pivot.rows.iter().chain(&pivot.cols).find(|f| f.name == filter.field);
+    Field {
+        name: filter.field.clone(),
+        group: used.map_or(Group::None, |f| f.group),
+        step: used.map_or(10.0, |f| f.step),
+        sort: SortKind::LabelAsc,
+        sort_value: 0,
+        top: None,
+    }
 }
 
 /// Os itens distintos de um campo, na ordem natural (para a lista de filtro).
@@ -1056,8 +1104,11 @@ mod tests {
         p.rows = vec![field("Produto")];
         p.filters = vec![Filter { field: "Região".into(), hidden: vec!["Sul".into()] }];
         let grid = compute(&p, &data()).unwrap();
-        assert_eq!(grid.cells[1], vec![t("A"), Out::Num(70.0)]);
-        assert_eq!(grid.cells[2], vec![t("B"), Out::Num(50.0)]);
+        // O filtro aparece acima da tabela, com uma linha em branco depois.
+        assert_eq!(grid.page_rows, 2);
+        assert_eq!(grid.cells[0], vec![t("Região"), t("Norte")]);
+        assert_eq!(grid.cells[3], vec![t("A"), Out::Num(70.0)]);
+        assert_eq!(grid.cells[4], vec![t("B"), Out::Num(50.0)]);
         p.filters.clear();
         p.rows[0].sort = SortKind::ValueDesc;
         let by_value = compute(&p, &data()).unwrap();

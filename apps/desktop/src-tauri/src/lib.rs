@@ -7,6 +7,7 @@ mod engine;
 mod package;
 mod pivot;
 mod pivot_sheet;
+mod pivot_xlsx;
 mod validation;
 
 use std::path::PathBuf;

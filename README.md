@@ -118,10 +118,15 @@ Limitações conhecidas:
 - Validação de dados: só vale ao digitar (colar e preencher não conferem),
   não entra no desfazer e não acompanha linhas e colunas inseridas; regras de
   data, hora e fórmula somem ao salvar. Itens de lista não podem ter vírgula.
-- Tabelas dinâmicas: no `.xlsx` ficam como valores comuns, mais a definição
-  numa parte que só o Abacus lê (o Excel mostra os números, mas não abre a
-  tabela como dinâmica). Desfazer volta por etapas (limpar, escrever, estilo),
-  não acompanham linhas e colunas inseridas e não podem ficar sobre os dados de
+- Tabelas dinâmicas: no `.xlsx` vão como tabela dinâmica nativa (cache, registros
+  e definição; o Excel e o LibreOffice a refazem ao abrir), mais os valores já
+  calculados e a definição do Abacus. Ficam só como valores (e voltam inteiras
+  no Abacus) as que usam agrupamento, valores distintos, "só os primeiros N"
+  ou ordem por valor, ou cuja origem tenha título de coluna em branco. O
+  LibreOffice ignora campos calculados. Não testado no Excel de verdade. Cada
+  criação ou alteração é um passo só no desfazer; desfazer a criação remove a
+  tabela, mas desfazer uma alteração não restaura o painel até atualizar. Não
+  acompanham linhas e colunas inseridas e não podem ficar sobre os dados de
   origem nem sobre outra tabela. Ainda não há segmentação de dados, expandir e
   recolher grupos, nem detalhar uma célula.
 - Gráficos: só colunas, barras, linhas e pizza (os de outros tipos, como
@@ -176,7 +181,7 @@ cargo test
 
 1. Propor o português do Brasil ao IronCalc original.
 2. Versão web com o motor em WebAssembly.
-3. Gravar tabelas dinâmicas no formato nativo do Excel.
+3. Instaladores e CI (GitHub Actions).
 
 ## Licença
 

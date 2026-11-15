@@ -397,6 +397,7 @@ impl Engine {
         let buffer = crate::validation::write_into(buffer, &self.sheet_names(), &self.validations)?;
         let buffer = crate::pivot_sheet::write_into(buffer, &self.pivots)?;
         let buffer = charts::write_into(buffer, &self.sheet_names(), &with_data)?;
+        let buffer = self.write_native_pivots(buffer)?;
         // Grava num arquivo temporário e troca no fim, para uma falha no meio
         // do caminho não estragar o arquivo que já existia.
         let mut temp = path.as_os_str().to_owned();
@@ -568,8 +569,11 @@ impl Engine {
         self.check_input(sheet, col, row, input)?;
         let (r, c) = to_ironcalc(col, row)?;
         let input = if input.trim().is_empty() { "" } else { input };
+        let depth = self.model.undo_depth();
         self.model.set_user_input(sheet, r, c, input)?;
         self.refresh_pivots_fed_by(sheet, col, row);
+        // A edição e as tabelas que ela refez voltam juntas no desfazer.
+        self.model.group_undo_since(depth);
         Ok(())
     }
 
@@ -1244,7 +1248,11 @@ impl Engine {
 
     /// Desfaz a última edição, se houver.
     pub fn undo(&mut self) -> Result<(), String> {
-        if self.model.can_undo() { self.model.undo() } else { Ok(()) }
+        if self.model.can_undo() {
+            self.model.undo()?;
+            self.forget_vanished_pivots();
+        }
+        Ok(())
     }
 
     /// Refaz a última edição desfeita, se houver.
@@ -2858,6 +2866,43 @@ mod tests {
     }
 
     #[test]
+    fn pivot_exports_native_excel_parts() {
+        use crate::pivot::*;
+        let mut e = sales();
+        let mut p = pv(&["Região"], &["Produto"]);
+        p.values.push(ValueField {
+            field: String::new(),
+            agg: Agg::Calc,
+            show_as: ShowAs::Normal,
+            title: "Dobro".into(),
+            format: String::new(),
+            formula: "[Vendas] * 2".into(),
+        });
+        e.add_pivot(p).unwrap();
+        let mut filtered = pv(&["Produto"], &[]);
+        filtered.col = 12;
+        filtered.filters = vec![Filter { field: "Região".into(), hidden: vec!["Sul".into()] }];
+        e.add_pivot(filtered).unwrap();
+        let mut grouped = pv(&["Região"], &[]);
+        grouped.col = 20;
+        grouped.rows[0].top = Some(1);
+        e.add_pivot(grouped).unwrap();
+        let path = temp_xlsx("nativa");
+        e.save(&path).unwrap();
+        if let Ok(copy) = std::env::var("ABACUS_KEEP_XLSX") {
+            fs::copy(&path, copy).unwrap();
+        }
+        let parts = crate::package::read_parts(&fs::read(&path).unwrap()).unwrap();
+        let names: Vec<&str> = parts.iter().map(|(n, _)| n.as_str()).collect();
+        // Duas tabelas nativas; a de "primeiros N" fica só como valores.
+        assert!(names.contains(&"xl/pivotTables/pivotTable2.xml"), "{names:?}");
+        assert!(!names.contains(&"xl/pivotTables/pivotTable3.xml"));
+        let back = Engine::open(&path).unwrap();
+        fs::remove_file(&path).unwrap();
+        assert_eq!(back.pivots(0), e.pivots(0));
+    }
+
+    #[test]
     fn pivot_definitions_survive_xlsx_and_sheet_deletion() {
         let mut e = sales();
         let mut p = pv(&["Região"], &["Produto"]);
@@ -2872,7 +2917,7 @@ mod tests {
         let back = Engine::open(&path).unwrap();
         fs::remove_file(&path).unwrap();
         assert_eq!(back.pivots(0), e.pivots(0));
-        assert_eq!(shown(&back, 5, 3), "Norte");
+        assert_eq!(shown(&back, 5, 5), "Norte");
 
         let mut e = sales();
         let sheet = e.add_sheet().unwrap();
@@ -2884,6 +2929,26 @@ mod tests {
         assert_eq!(e.pivots(sheet).len(), 1);
         e.delete_sheet(sheet).unwrap();
         assert!(e.pivots(0).is_empty() && e.pivots(sheet).is_empty());
+    }
+
+    #[test]
+    fn pivot_changes_undo_in_one_step() {
+        let mut e = sales();
+        let before = e.model.undo_depth();
+        e.add_pivot(pv(&["Região"], &["Produto"])).unwrap();
+        assert_eq!(e.model.undo_depth(), before + 1);
+        // Mexer nos dados refaz a tabela e volta junto com a edição.
+        let made = e.model.undo_depth();
+        e.set_cell(0, 2, 1, "100").unwrap();
+        assert_eq!(e.model.undo_depth(), made + 1);
+        assert_eq!(shown(&e, 6, 4), "100");
+        e.undo().unwrap();
+        assert_eq!(shown(&e, 6, 4), "10");
+        assert_eq!(shown(&e, 2, 1), "10");
+        // Desfazer a criação apaga a grade e a definição.
+        e.undo().unwrap();
+        assert_eq!(shown(&e, 5, 1), "");
+        assert!(e.pivots(0).is_empty());
     }
 
     #[test]
