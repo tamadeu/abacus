@@ -177,11 +177,21 @@ Testes, a partir da raiz:
 cargo test
 ```
 
+## Integração contínua e instaladores
+
+- `.github/workflows/ci.yml`: a cada push e pull request roda formatação,
+  clippy, testes e o build do front-end (Linux), e compila o app em Linux,
+  Windows e macOS.
+- `.github/workflows/release.yml`: ao criar uma tag `v*` (por exemplo
+  `git tag v0.1.0 && git push --tags`), gera os instaladores (`.msi`/`.exe`,
+  `.dmg`, `.deb`/`.rpm`/`.AppImage`) e os anexa a um rascunho de release no
+  GitHub. Ainda não são assinados, então o Windows e o macOS mostram aviso.
+
 ## Próximos passos
 
 1. Propor o português do Brasil ao IronCalc original.
 2. Versão web com o motor em WebAssembly.
-3. Instaladores e CI (GitHub Actions).
+3. Assinar os instaladores (Windows e macOS) e publicar em lojas.
 
 ## Licença
 
