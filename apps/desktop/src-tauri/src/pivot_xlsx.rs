@@ -332,8 +332,8 @@ fn pivot_table_xml(e: &Export, fields: &[CacheField], cache_id: u32) -> String {
             .unwrap_or("");
         let hidden: Vec<&String> = p.filters.iter().filter(|x| x.field == f.name).flat_map(|x| &x.hidden).collect();
         let mut items = String::new();
-        for k in 0..f.items.as_ref().map_or(0, Vec::len) {
-            if hidden.iter().any(|h| **h == f.item_text[k]) {
+        for (k, text) in f.item_text.iter().enumerate() {
+            if hidden.iter().any(|h| *h == text) {
                 items.push_str(&format!("<item h=\"1\" x=\"{k}\"/>"));
             } else {
                 items.push_str(&format!("<item x=\"{k}\"/>"));
