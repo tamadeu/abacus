@@ -19,6 +19,8 @@ use ironcalc::export::save_xlsx_to_writer;
 use ironcalc::import::load_from_xlsx;
 use serde::{Deserialize, Serialize};
 
+use crate::charts::{self, CellInfo, Chart, ChartData, ChartKind, MAX_CHART_COLS, MAX_CHART_ROWS};
+
 /// Localidade dos números, datas e moeda: português do Brasil. Vem do fork
 /// do IronCalc declarado no `Cargo.toml`; o IronCalc 0.9 não a tem.
 const LOCALE: &str = "pt";
@@ -298,13 +300,23 @@ struct Copied {
 pub struct Engine {
     model: UserModel<'static>,
     copied: Option<Copied>,
+    /// Gráficos de todas as planilhas; o motor não os conhece.
+    charts: Vec<Chart>,
+}
+
+/// Um gráfico com os dados que ele mostra agora.
+#[derive(Debug, Serialize)]
+pub struct ChartView {
+    #[serde(flatten)]
+    pub chart: Chart,
+    pub data: ChartData,
 }
 
 impl Engine {
     /// Pasta nova, com uma planilha vazia.
     pub fn new() -> Result<Self, String> {
         let model = UserModel::new_empty("Pasta1", LOCALE, TIMEZONE, LANGUAGE)?;
-        Ok(Self { model, copied: None })
+        Ok(Self { model, copied: None, charts: Vec::new() })
     }
 
     /// Abre um arquivo `.xlsx`.
@@ -313,7 +325,11 @@ impl Engine {
         let model = load_from_xlsx(file_name, LOCALE, TIMEZONE, LANGUAGE).map_err(|e| e.to_string())?;
         let mut model = UserModel::from_model(model);
         model.evaluate();
-        Ok(Self { model, copied: None })
+        let mut engine = Self { model, copied: None, charts: Vec::new() };
+        if let Ok(bytes) = fs::read(path) {
+            engine.charts = charts::read_from(&bytes, &engine.sheet_names());
+        }
+        Ok(engine)
     }
 
     /// Abre um arquivo CSV como uma pasta nova, com uma planilha só. Aceita
@@ -356,6 +372,9 @@ impl Engine {
         let buffer = save_xlsx_to_writer(self.model.get_model(), Cursor::new(Vec::new()))
             .map_err(|e| e.to_string())?
             .into_inner();
+        let with_data: Vec<(Chart, ChartData)> =
+            self.charts.iter().map(|chart| (chart.clone(), self.data_of(chart))).collect();
+        let buffer = charts::write_into(buffer, &self.sheet_names(), &with_data)?;
         // Grava num arquivo temporário e troca no fim, para uma falha no meio
         // do caminho não estragar o arquivo que já existia.
         let mut temp = path.as_os_str().to_owned();
@@ -402,7 +421,106 @@ impl Engine {
         }
         // O que foi copiado guarda o índice da planilha de origem, que muda.
         self.copied = None;
-        self.model.delete_sheet(sheet)
+        self.model.delete_sheet(sheet)?;
+        // Os gráficos da planilha somem com ela; os das seguintes sobem um índice.
+        self.charts.retain(|chart| chart.sheet != sheet);
+        for chart in &mut self.charts {
+            if chart.sheet > sheet {
+                chart.sheet -= 1;
+            }
+        }
+        Ok(())
+    }
+
+    /// Nomes de todas as planilhas, inclusive as ocultas, na ordem das abas.
+    fn sheet_names(&self) -> Vec<String> {
+        self.model.get_worksheets_properties().into_iter().map(|sheet| sheet.name).collect()
+    }
+
+    /// O que o gráfico mostra, lido das células.
+    fn data_of(&self, chart: &Chart) -> ChartData {
+        charts::build_data(chart.range, |row, col| {
+            let Ok((row, col)) = to_ironcalc(col, row) else {
+                return CellInfo { text: String::new(), number: None };
+            };
+            let number = match self.model.get_model().get_cell_value_by_index(chart.sheet, row, col) {
+                Ok(CellValue::Number(number)) => Some(number),
+                _ => None,
+            };
+            CellInfo { text: self.model.get_formatted_cell_value(chart.sheet, row, col).unwrap_or_default(), number }
+        })
+    }
+
+    /// Os gráficos de uma planilha.
+    pub fn charts(&self, sheet: u32) -> Vec<ChartView> {
+        self.charts
+            .iter()
+            .filter(|chart| chart.sheet == sheet)
+            .map(|chart| ChartView { chart: chart.clone(), data: self.data_of(chart) })
+            .collect()
+    }
+
+    /// Confere o intervalo e a posição de um gráfico.
+    fn check_chart(&self, chart: &Chart) -> Result<(), String> {
+        if usize::try_from(chart.sheet).map_or(true, |sheet| sheet >= self.sheet_names().len()) {
+            return Err("a planilha do gráfico não existe".into());
+        }
+        let range = chart.range;
+        if range.cols == 0 || range.rows == 0 {
+            return Err("o intervalo do gráfico está vazio".into());
+        }
+        if range.cols > MAX_CHART_COLS || range.rows > MAX_CHART_ROWS {
+            return Err(format!("o gráfico aceita até {MAX_CHART_COLS} colunas e {MAX_CHART_ROWS} linhas de dados"));
+        }
+        if range.col + range.cols > MAX_COLS as u32 || range.row + range.rows > MAX_ROWS as u32 {
+            return Err("o intervalo do gráfico passa do limite da planilha".into());
+        }
+        if chart.to_col < chart.from_col || chart.to_row < chart.from_row || chart.to_col >= MAX_COLS as u32 || chart.to_row >= MAX_ROWS as u32 {
+            return Err("a posição do gráfico é inválida".into());
+        }
+        Ok(())
+    }
+
+    /// Cria um gráfico com os dados do intervalo, ao lado dele.
+    pub fn add_chart(&mut self, sheet: u32, kind: ChartKind, range: Range) -> Result<ChartView, String> {
+        let from_col = (range.col + range.cols + 1).min(MAX_COLS as u32 - 8);
+        let mut chart = Chart {
+            id: self.charts.iter().map(|chart| chart.id).max().unwrap_or(0) + 1,
+            sheet,
+            kind,
+            title: String::new(),
+            range,
+            from_col,
+            from_row: range.row,
+            to_col: from_col + 7,
+            to_row: (range.row + 14).min(MAX_ROWS as u32 - 1),
+        };
+        self.check_chart(&chart)?;
+        // Como no Excel, uma série só dá o título ao gráfico.
+        let data = self.data_of(&chart);
+        if data.series.len() == 1 && data.has_header {
+            chart.title = data.series[0].name.clone();
+        }
+        self.charts.push(chart.clone());
+        Ok(ChartView { chart, data })
+    }
+
+    /// Troca um gráfico (tipo, título, dados ou posição) pelo seu novo estado.
+    pub fn update_chart(&mut self, chart: Chart) -> Result<ChartView, String> {
+        self.check_chart(&chart)?;
+        let slot = self.charts.iter_mut().find(|c| c.id == chart.id).ok_or("o gráfico não existe mais")?;
+        *slot = chart.clone();
+        Ok(ChartView { data: self.data_of(&chart), chart })
+    }
+
+    /// Apaga um gráfico.
+    pub fn delete_chart(&mut self, id: u32) -> Result<(), String> {
+        let before = self.charts.len();
+        self.charts.retain(|chart| chart.id != id);
+        if self.charts.len() == before {
+            return Err("o gráfico não existe mais".into());
+        }
+        Ok(())
     }
 
     /// Define a largura de uma coluna, em pixels.
@@ -2220,6 +2338,109 @@ mod tests {
         assert_eq!((filled.input.as_str(), filled.display.as_str()), ("", ""));
         assert_eq!(filled.style.unwrap().fill.as_deref(), Some("#E7E5FB"));
         assert_eq!(cell_in(&reopened, second, 0, 0).unwrap().display, "outra planilha");
+    }
+
+    #[test]
+    fn chart_data_splits_categories_series_and_header() {
+        let e = engine(&[
+            (0, 0, "Mês"), (1, 0, "Vendas"), (2, 0, "Custos"),
+            (0, 1, "Jan"), (1, 1, "10"), (2, 1, "4"),
+            (0, 2, "Fev"), (1, 2, "20,5"), (2, 2, "6"),
+        ]);
+        let all = Range { col: 0, row: 0, cols: 3, rows: 3 };
+        let data = e.data_of(&Chart { id: 1, sheet: 0, kind: ChartKind::Column, title: String::new(), range: all, from_col: 4, from_row: 0, to_col: 8, to_row: 9 });
+        assert_eq!(data.categories, ["Jan", "Fev"]);
+        assert_eq!(data.series.len(), 2);
+        assert_eq!(data.series[0].name, "Vendas");
+        assert_eq!(data.series[0].values, [Some(10.0), Some(20.5)]);
+        assert_eq!(data.series[1].values, [Some(4.0), Some(6.0)]);
+
+        // Só números: sem categorias nem títulos, as séries têm nome próprio.
+        let e = engine(&[(0, 0, "1"), (1, 0, "2"), (0, 1, "3"), (1, 1, "4")]);
+        let data = e.data_of(&Chart { id: 1, sheet: 0, kind: ChartKind::Line, title: String::new(), range: Range { col: 0, row: 0, cols: 2, rows: 2 }, from_col: 4, from_row: 0, to_col: 8, to_row: 9 });
+        assert_eq!(data.categories, ["1", "2"]);
+        assert_eq!(data.series.iter().map(|s| s.name.as_str()).collect::<Vec<_>>(), ["Série 1", "Série 2"]);
+    }
+
+    #[test]
+    fn charts_are_created_validated_updated_and_deleted() {
+        let mut e = engine(&[(0, 0, "Mês"), (1, 0, "Vendas"), (0, 1, "Jan"), (1, 1, "10"), (0, 2, "Fev"), (1, 2, "20")]);
+        let range = Range { col: 0, row: 0, cols: 2, rows: 3 };
+        let view = e.add_chart(0, ChartKind::Bar, range).unwrap();
+        // Uma série com título vira o título do gráfico; o gráfico fica ao lado dos dados.
+        assert_eq!((view.chart.title.as_str(), view.chart.from_col, view.chart.from_row), ("Vendas", 3, 0));
+        assert_eq!(e.charts(0).len(), 1);
+        assert!(e.charts(1).is_empty());
+
+        assert!(e.add_chart(0, ChartKind::Column, Range { col: 0, row: 0, cols: 0, rows: 3 }).is_err());
+        assert!(e.add_chart(0, ChartKind::Column, Range { col: 0, row: 0, cols: 51, rows: 3 }).is_err());
+        assert!(e.add_chart(9, ChartKind::Column, range).is_err());
+
+        let mut moved = view.chart.clone();
+        moved.kind = ChartKind::Pie;
+        moved.title = "Novo".into();
+        moved.to_col += 2;
+        assert_eq!(e.update_chart(moved.clone()).unwrap().chart, moved);
+        moved.to_col = 0;
+        assert!(e.update_chart(moved).is_err());
+
+        e.delete_chart(view.chart.id).unwrap();
+        assert!(e.charts(0).is_empty());
+        assert!(e.delete_chart(view.chart.id).is_err());
+    }
+
+    #[test]
+    fn charts_survive_saving_and_reopening() {
+        let mut e = engine(&[
+            (0, 0, "Mês"), (1, 0, "Vendas"), (2, 0, "Custos"),
+            (0, 1, "Jan"), (1, 1, "10"), (2, 1, "4"),
+            (0, 2, "Fev"), (1, 2, "20"), (2, 2, "6"),
+        ]);
+        let range = Range { col: 0, row: 0, cols: 3, rows: 3 };
+        for kind in [ChartKind::Column, ChartKind::Bar, ChartKind::Line, ChartKind::Pie] {
+            let mut chart = e.add_chart(0, kind, range).unwrap().chart;
+            chart.title = format!("Gráfico & <{kind:?}>");
+            e.update_chart(chart).unwrap();
+        }
+        // Planilha com nome que pede aspas, com um gráfico também.
+        let second = e.add_sheet().unwrap();
+        e.rename_sheet(second, "Dados d'água").unwrap();
+        e.set_cell(second, 0, 0, "x").unwrap();
+        e.set_cell(second, 0, 1, "5").unwrap();
+        e.add_chart(second, ChartKind::Column, Range { col: 0, row: 0, cols: 1, rows: 2 }).unwrap();
+
+        let path = temp_xlsx("charts");
+        e.save(&path).unwrap();
+        let reopened = Engine::open(&path).unwrap();
+        // Salvar de novo o que veio do arquivo não perde nem duplica nada.
+        let again = temp_xlsx("charts-again");
+        reopened.save(&again).unwrap();
+        let twice = Engine::open(&again).unwrap();
+        fs::remove_file(&path).unwrap();
+        fs::remove_file(&again).unwrap();
+
+        for engine in [&reopened, &twice] {
+            let first: Vec<_> = engine.charts(0).into_iter().map(|v| (v.chart.kind, v.chart.title, v.chart.range, v.chart.from_col, v.chart.to_col, v.chart.to_row)).collect();
+            let expected: Vec<_> = e.charts(0).into_iter().map(|v| (v.chart.kind, v.chart.title, v.chart.range, v.chart.from_col, v.chart.to_col, v.chart.to_row)).collect();
+            assert_eq!(first, expected);
+            assert_eq!(engine.charts(second).len(), 1);
+            assert_eq!(engine.charts(second)[0].chart.range, Range { col: 0, row: 0, cols: 1, rows: 2 });
+            assert_eq!(engine.charts(0)[0].data.series.len(), 2);
+        }
+    }
+
+    #[test]
+    fn deleting_a_sheet_drops_and_renumbers_its_charts() {
+        let mut e = engine(&[(0, 0, "a"), (0, 1, "1")]);
+        let second = e.add_sheet().unwrap();
+        e.set_cell(second, 0, 0, "b").unwrap();
+        e.set_cell(second, 0, 1, "2").unwrap();
+        let range = Range { col: 0, row: 0, cols: 1, rows: 2 };
+        e.add_chart(0, ChartKind::Column, range).unwrap();
+        e.add_chart(second, ChartKind::Line, range).unwrap();
+        e.delete_sheet(0).unwrap();
+        assert_eq!(e.charts(0).len(), 1);
+        assert_eq!(e.charts(0)[0].chart.kind, ChartKind::Line);
     }
 
     #[test]

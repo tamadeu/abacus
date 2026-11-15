@@ -2,6 +2,8 @@ import {
   createEngine,
   type BorderKind,
   type CellView,
+  type ChartInfo,
+  type ChartKind,
   type Direction,
   type FilterOptions,
   type Range,
@@ -9,6 +11,7 @@ import {
   type Structure,
   type StyleProperty,
 } from "./engine";
+import { CHART_HANDLE, drawChart, type Box } from "./chart-draw";
 import FUNCTIONS from "./functions.json";
 import { formulaRefs } from "./refs";
 
@@ -70,6 +73,11 @@ const replaceText = $<HTMLInputElement>("#replace-text");
 const filterPanel = $("#filter");
 const filterTitle = $("#filter-title");
 const filterValues = $("#filter-values");
+const chartPanel = $("#chart-panel");
+const chartTitle = $<HTMLInputElement>("#chart-title");
+const chartKindSelect = $<HTMLSelectElement>("#chart-kind");
+const chartRange = $<HTMLInputElement>("#chart-range");
+const chartError = $("#chart-error");
 
 /** Estilos que a barra de ferramentas liga e desliga. */
 type ToggleProperty = "bold" | "italic" | "underline" | "strike" | "wrap";
@@ -178,6 +186,12 @@ let filtering: FilterOptions | null = null;
 let filePath: string | null = null;
 /** A pasta tem alterações que não estão no arquivo. */
 let modified = false;
+/** Gráficos da planilha na tela, com os dados que mostram. */
+let charts: ChartInfo[] = [];
+/** Gráfico selecionado (o `id`), se houver. */
+let selectedChart: number | null = null;
+/** Gráfico sendo movido ou redimensionado com o mouse. */
+let chartDrag: { id: number; mode: "move" | "resize"; grab: Cell; origin: ChartInfo; moved: boolean } | null = null;
 
 const key = (col: number, row: number) => `${col},${row}`;
 const clamp = (value: number, max: number) => Math.min(Math.max(value, 0), max);
@@ -385,6 +399,31 @@ function cellAt(px: number, py: number): Cell {
   };
 }
 
+/** Retângulo do gráfico na tela, ou `null` se o canto dele não está visível. */
+function chartBox(chart: ChartInfo): Box | null {
+  if (!colOnScreen(chart.fromCol) || !rowOnScreen(chart.fromRow)) return null;
+  const left = xOf(chart.fromCol);
+  const top = yOf(chart.fromRow);
+  const width = xOf(chart.toCol + 1) - left;
+  const height = yOf(chart.toRow + 1) - top;
+  return width > 0 && height > 0 ? { left, top, width, height } : null;
+}
+
+/** O gráfico mais acima sob um ponto do canvas. */
+function chartAt(px: number, py: number): ChartInfo | null {
+  for (const chart of [...charts].reverse()) {
+    const box = chartBox(chart);
+    if (box && px >= box.left && px <= box.left + box.width && py >= box.top && py <= box.top + box.height) return chart;
+  }
+  return null;
+}
+
+/** O ponto está na alça de redimensionar do gráfico? */
+function onChartHandle(chart: ChartInfo, px: number, py: number): boolean {
+  const box = chartBox(chart);
+  return box !== null && px >= box.left + box.width - CHART_HANDLE - 3 && py >= box.top + box.height - CHART_HANDLE - 3;
+}
+
 function draw() {
   const width = wrap.clientWidth;
   const height = wrap.clientHeight;
@@ -524,6 +563,12 @@ function draw() {
       }
     });
     ctx.restore();
+  }
+
+  // Gráficos, sobre as células
+  for (const chart of charts) {
+    const box = chartBox(chart);
+    if (box) drawChart(ctx, chart, box, chart.id === selectedChart);
   }
 
   // Seleção: o intervalo fica tingido, menos a célula ativa.
@@ -915,6 +960,8 @@ async function refresh() {
     pos.origin.row = Math.max(pos.origin.row, frozen.rows);
     colX = edges(colWidths, HEADER_WIDTH);
     rowY = edges(rowHeights, HEADER_HEIGHT);
+    charts = await engine.charts(sheet);
+    if (!charts.some((chart) => chart.id === selectedChart)) selectedChart = null;
     cells = new Map(view.cells.map((cell) => [key(cell.col, cell.row), cell]));
     merges = view.merges;
     covered = new Set();
@@ -1608,6 +1655,8 @@ async function loadSheets() {
 async function showSheet(index: number) {
   if (!(await write())) return;
   positions.set(sheet, pos);
+  selectedChart = null;
+  closeChartPanel();
   sheet = index;
   pos = positions.get(index) ?? newPosition();
   renderTabs();
@@ -1657,6 +1706,8 @@ async function openFile() {
     positions = new Map();
     sheet = 0;
     pos = newPosition();
+    selectedChart = null;
+    closeChartPanel();
     statusEl.textContent = "Pronto";
     syncDocument();
     await loadSheets();
@@ -1797,6 +1848,156 @@ function autoScroll() {
   }, 60);
 }
 
+// --- Gráficos ---
+
+/** Move ou redimensiona o gráfico segundo o mouse, de célula em célula. */
+function dragChart(px: number, py: number) {
+  const drag = chartDrag;
+  const chart = drag && charts.find((one) => one.id === drag.id);
+  if (!drag || !chart) return;
+  const cell = cellAt(px, py);
+  const { origin } = drag;
+  if (drag.mode === "move") {
+    const cols = origin.toCol - origin.fromCol;
+    const rows = origin.toRow - origin.fromRow;
+    chart.fromCol = clamp(origin.fromCol + cell.col - drag.grab.col, MAX_COLS - 1 - cols);
+    chart.fromRow = clamp(origin.fromRow + cell.row - drag.grab.row, MAX_ROWS - 1 - rows);
+    chart.toCol = chart.fromCol + cols;
+    chart.toRow = chart.fromRow + rows;
+  } else {
+    chart.toCol = Math.max(cell.col, origin.fromCol + 2);
+    chart.toRow = Math.max(cell.row, origin.fromRow + 3);
+  }
+  drag.moved = true;
+  draw();
+}
+
+/** Grava o novo estado do gráfico; se o motor recusar, volta ao que estava. */
+async function saveChart(chart: ChartInfo) {
+  try {
+    const saved = await engine.updateChart(chart);
+    charts = charts.map((one) => (one.id === saved.id ? saved : one));
+    statusEl.textContent = "Pronto";
+    markModified();
+    chartError.hidden = true;
+  } catch (error) {
+    statusEl.textContent = `Erro ao alterar o gráfico: ${error}`;
+    chartError.textContent = String(error);
+    chartError.hidden = chartPanel.hidden;
+  }
+  await refresh();
+}
+
+async function removeChart(id: number) {
+  try {
+    await engine.deleteChart(id);
+    selectedChart = null;
+    closeChartPanel();
+    statusEl.textContent = "Pronto";
+    markModified();
+  } catch (error) {
+    statusEl.textContent = `Erro ao apagar o gráfico: ${error}`;
+  }
+  canvas.focus();
+  await refresh();
+}
+
+/** Cria um gráfico com a seleção, ou com a tabela em volta da célula ativa. */
+async function insertChart(kind: ChartKind) {
+  if (!(await write())) return;
+  try {
+    let range = selectedRange();
+    if (range.cols === 1 && range.rows === 1) range = await engine.dataRegion(sheet, range.col, range.row);
+    if (range.cols * range.rows < 2) {
+      statusEl.textContent = "Selecione as células com os dados do gráfico";
+      return;
+    }
+    const created = await engine.addChart(sheet, kind, range);
+    selectedChart = created.id;
+    markModified();
+    statusEl.textContent = "Gráfico inserido: arraste para mover; dois cliques abrem as opções";
+  } catch (error) {
+    statusEl.textContent = `Erro ao inserir o gráfico: ${error}`;
+  }
+  canvas.focus();
+  await refresh();
+}
+
+const rangeText = (range: Range) =>
+  `${colName(range.col)}${range.row + 1}:${colName(range.col + range.cols - 1)}${range.row + range.rows}`;
+
+/** Lê `A1:C5` (ou `A1`) como intervalo. */
+function parseRange(text: string): Range | null {
+  const match = /^\s*\$?([A-Za-z]{1,3})\$?(\d{1,7})(?::\$?([A-Za-z]{1,3})\$?(\d{1,7}))?\s*$/.exec(text);
+  if (!match) return null;
+  const letters = (name: string) => [...name.toUpperCase()].reduce((col, letter) => col * 26 + letter.charCodeAt(0) - 64, 0) - 1;
+  const [, c1, r1, c2 = c1, r2 = r1] = match;
+  const cols = [letters(c1), letters(c2)].sort((a, b) => a - b);
+  const rows = [Number(r1) - 1, Number(r2) - 1].sort((a, b) => a - b);
+  if (cols[1] >= MAX_COLS || rows[0] < 0 || rows[1] >= MAX_ROWS) return null;
+  return { col: cols[0], row: rows[0], cols: cols[1] - cols[0] + 1, rows: rows[1] - rows[0] + 1 };
+}
+
+/** O gráfico que o painel de opções edita. */
+let panelChart: number | null = null;
+
+function openChartPanel(chart: ChartInfo) {
+  panelChart = chart.id;
+  chartTitle.value = chart.title;
+  chartKindSelect.value = chart.kind;
+  chartRange.value = rangeText(chart.range);
+  chartError.hidden = true;
+  chartPanel.hidden = false;
+  const area = canvas.getBoundingClientRect();
+  const box = chartBox(chart);
+  const width = chartPanel.offsetWidth;
+  const height = chartPanel.offsetHeight;
+  let left = area.left + (box ? box.left + box.width + 10 : 60);
+  if (left + width > window.innerWidth - 8) left = area.left + (box ? box.left : 60) - width - 10;
+  const top = area.top + (box ? box.top : 60);
+  chartPanel.style.left = `${Math.max(8, Math.min(left, window.innerWidth - width - 8))}px`;
+  chartPanel.style.top = `${Math.max(8, Math.min(top, window.innerHeight - height - 8))}px`;
+}
+
+function closeChartPanel() {
+  chartPanel.hidden = true;
+  panelChart = null;
+}
+
+/** Aplica uma mudança do painel ao gráfico dele. */
+async function changeChart(patch: (chart: ChartInfo) => ChartInfo | null) {
+  const chart = charts.find((one) => one.id === panelChart);
+  if (!chart) return;
+  const updated = patch({ ...chart });
+  if (updated) await saveChart(updated);
+}
+
+chartTitle.addEventListener("change", () => void changeChart((chart) => ({ ...chart, title: chartTitle.value.trim() })));
+chartKindSelect.addEventListener("change", () => void changeChart((chart) => ({ ...chart, kind: chartKindSelect.value as ChartKind })));
+chartRange.addEventListener("change", () =>
+  void changeChart((chart) => {
+    const range = parseRange(chartRange.value);
+    if (!range) {
+      chartError.textContent = "Escreva o intervalo assim: A1:C5";
+      chartError.hidden = false;
+      return null;
+    }
+    return { ...chart, range };
+  }),
+);
+$("#chart-delete").addEventListener("click", () => {
+  if (panelChart !== null) void removeChart(panelChart);
+});
+$("#chart-close").addEventListener("click", () => {
+  closeChartPanel();
+  canvas.focus();
+});
+chartPanel.addEventListener("keydown", (event) => {
+  if (event.key !== "Escape") return;
+  closeChartPanel();
+  canvas.focus();
+});
+
 canvas.addEventListener("pointerdown", (event) => {
   if (event.button !== 0) return;
   const { px, py } = pointerAt(event);
@@ -1807,6 +2008,27 @@ canvas.addEventListener("pointerdown", (event) => {
     resized = false;
     canvas.setPointerCapture(event.pointerId);
     return;
+  }
+  // Um gráfico sob o mouse: seleciona e começa a mover, ou a redimensionar pela alça.
+  const hit = px >= HEADER_WIDTH && py >= HEADER_HEIGHT ? chartAt(px, py) : null;
+  if (hit) {
+    selectedChart = hit.id;
+    chartDrag = {
+      id: hit.id,
+      mode: onChartHandle(hit, px, py) ? "resize" : "move",
+      grab: cellAt(px, py),
+      origin: { ...hit },
+      moved: false,
+    };
+    canvas.setPointerCapture(event.pointerId);
+    if (!chartPanel.hidden) openChartPanel(hit);
+    void write();
+    draw();
+    return;
+  }
+  if (selectedChart !== null) {
+    selectedChart = null;
+    closeChartPanel();
   }
   const handle = fillHandle();
   if (handle && Math.abs(px - handle.x) <= HANDLE_GRIP && Math.abs(py - handle.y) <= HANDLE_GRIP) {
@@ -1857,6 +2079,10 @@ canvas.addEventListener("pointermove", (event) => {
     draw();
     return;
   }
+  if (chartDrag) {
+    dragChart(px, py);
+    return;
+  }
   if (dragging || fillDrag || pointDrag || headerDrag) {
     lastPointer = { px, py };
     dragTo(px, py);
@@ -1867,7 +2093,12 @@ canvas.addEventListener("pointermove", (event) => {
   const handle = fillHandle();
   const onHandle = handle !== null && Math.abs(px - handle.x) <= HANDLE_GRIP && Math.abs(py - handle.y) <= HANDLE_GRIP;
   const header = headerAt(px, py);
-  canvas.style.cursor = grip
+  const overChart = px >= HEADER_WIDTH && py >= HEADER_HEIGHT ? chartAt(px, py) : null;
+  canvas.style.cursor = overChart
+    ? onChartHandle(overChart, px, py)
+      ? "nwse-resize"
+      : "move"
+    : grip
     ? grip.kind === "col"
       ? "col-resize"
       : "row-resize"
@@ -1880,6 +2111,12 @@ canvas.addEventListener("pointermove", (event) => {
 
 const endDrag = () => {
   stopAutoScroll();
+  if (chartDrag) {
+    const drag = chartDrag;
+    chartDrag = null;
+    const chart = charts.find((one) => one.id === drag.id);
+    if (chart && drag.moved) void saveChart(chart);
+  }
   dragging = false;
   headerDrag = null;
   if (resizing) {
@@ -1914,6 +2151,13 @@ canvas.addEventListener("pointercancel", endDrag);
 canvas.addEventListener("dblclick", (event) => {
   const { px, py } = pointerAt(event);
   const grip = gripAt(px, py);
+  const chart = px >= HEADER_WIDTH && py >= HEADER_HEIGHT ? chartAt(px, py) : null;
+  if (chart) {
+    selectedChart = chart.id;
+    openChartPanel(chart);
+    draw();
+    return;
+  }
   // Dois cliques numa célula abrem a edição do conteúdo dela.
   if (!grip && px >= HEADER_WIDTH && py >= HEADER_HEIGHT && editMode === null) {
     startEdit(null, "edit");
@@ -1969,6 +2213,25 @@ canvas.addEventListener("keydown", (event) => {
   const shortcut = event.ctrlKey || event.metaKey;
   const letter = event.key.toLowerCase();
   const toggles: Record<string, "bold" | "italic" | "underline"> = { b: "bold", i: "italic", u: "underline" };
+
+  // Com um gráfico selecionado, Delete o apaga, Enter abre as opções e Esc solta a seleção.
+  if (selectedChart !== null && !shortcut) {
+    const chart = charts.find((one) => one.id === selectedChart);
+    if (chart && (event.key === "Delete" || event.key === "Backspace")) {
+      event.preventDefault();
+      void removeChart(chart.id);
+      return;
+    }
+    if (chart && event.key === "Enter") {
+      event.preventDefault();
+      openChartPanel(chart);
+      return;
+    }
+    selectedChart = null;
+    closeChartPanel();
+    draw();
+    if (event.key === "Escape") return;
+  }
 
   if (shortcut && letter === "z") {
     event.preventDefault();
@@ -2195,6 +2458,13 @@ borderSelect.addEventListener("change", () => {
 canvas.addEventListener("contextmenu", (event) => {
   event.preventDefault();
   const { px, py } = pointerAt(event);
+  const overChart = px >= HEADER_WIDTH && py >= HEADER_HEIGHT ? chartAt(px, py) : null;
+  if (overChart) {
+    selectedChart = overChart.id;
+    openChartPanel(overChart);
+    draw();
+    return;
+  }
   const cell = cellAt(px, py);
   const range = selectedRange();
   const header = headerAt(px, py);
@@ -2246,6 +2516,7 @@ function runAction(action: string, at: { left: number; top: number }) {
   else if (action === "clear-filter") void clearFilter();
   else if (action === "hide-rows" || action === "show-rows") void setHidden("rows", action === "hide-rows");
   else if (action === "hide-cols" || action === "show-cols") void setHidden("cols", action === "hide-cols");
+  else if (action.startsWith("chart-")) void insertChart(action.slice(6) as ChartKind);
   else if (action === "freeze") void freezeAtSelection();
   else if (action === "unfreeze") void change("descongelar", () => engine.setFrozen(sheet, 0, 0));
   else void changeStructure(action);

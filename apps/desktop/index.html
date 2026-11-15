@@ -93,6 +93,12 @@
       <button type="button" data-action="insert-col-left">Coluna à esquerda</button>
       <button type="button" data-action="insert-col-right">Coluna à direita</button>
       <button type="button" data-action="delete-cols">Excluir colunas</button>
+      <span class="separator" aria-hidden="true"></span>
+      <span class="toolbar-label">Gráfico</span>
+      <button type="button" data-action="chart-column" title="Gráfico de colunas com a seleção (ou a tabela em volta da célula ativa)">Colunas</button>
+      <button type="button" data-action="chart-bar" title="Gráfico de barras">Barras</button>
+      <button type="button" data-action="chart-line" title="Gráfico de linhas">Linhas</button>
+      <button type="button" data-action="chart-pie" title="Gráfico de pizza">Pizza</button>
     </div>
 
     <div class="toolbar" id="panel-data" role="tabpanel" aria-labelledby="tab-data" hidden>
@@ -168,6 +174,26 @@
         <button type="button" id="filter-all">Marcar tudo</button>
         <button type="button" id="filter-cancel">Cancelar</button>
         <button type="button" id="filter-apply" class="primary">Aplicar</button>
+      </div>
+    </div>
+
+    <div id="chart-panel" role="dialog" aria-label="Opções do gráfico" hidden>
+      <strong>Gráfico</strong>
+      <label>Título <input id="chart-title" type="text" autocomplete="off" /></label>
+      <label>
+        Tipo
+        <select id="chart-kind">
+          <option value="column">Colunas</option>
+          <option value="bar">Barras</option>
+          <option value="line">Linhas</option>
+          <option value="pie">Pizza</option>
+        </select>
+      </label>
+      <label>Dados <input id="chart-range" type="text" autocomplete="off" placeholder="A1:C5" /></label>
+      <p id="chart-error" role="alert" hidden></p>
+      <div class="filter-actions">
+        <button type="button" id="chart-delete">Excluir</button>
+        <button type="button" id="chart-close" class="primary">Fechar</button>
       </div>
     </div>
 

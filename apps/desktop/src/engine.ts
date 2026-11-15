@@ -63,6 +63,32 @@ export interface Stats {
   sum: number;
 }
 
+/** Tipo de um gráfico. */
+export type ChartKind = "column" | "bar" | "line" | "pie";
+
+/** O que o gráfico mostra, lido das células. */
+export interface ChartData {
+  categories: string[];
+  series: { name: string; values: (number | null)[] }[];
+}
+
+/**
+ * Um gráfico sobre a grade, do canto da célula `from` ao fim da célula `to`
+ * (inclusive), com os dados do intervalo `range`.
+ */
+export interface ChartInfo {
+  id: number;
+  sheet: number;
+  kind: ChartKind;
+  title: string;
+  range: Range;
+  fromCol: number;
+  fromRow: number;
+  toCol: number;
+  toRow: number;
+  data: ChartData;
+}
+
 /** Direção de um salto até a borda de um bloco de dados (Ctrl+seta). */
 export type Direction = "left" | "right" | "up" | "down";
 
@@ -247,6 +273,15 @@ export interface Engine {
   filterOptions(sheet: number, col: number, row: number): Promise<FilterOptions>;
   /** Mostra só as linhas do intervalo com um dos valores na coluna. Devolve quantas ficaram ocultas. */
   applyFilter(sheet: number, range: Range, col: number, allowed: string[]): Promise<number>;
+  /** O bloco de dados contínuo em volta da célula. */
+  dataRegion(sheet: number, col: number, row: number): Promise<Range>;
+  /** Gráficos da planilha. */
+  charts(sheet: number): Promise<ChartInfo[]>;
+  /** Cria um gráfico com os dados do intervalo, ao lado dele. */
+  addChart(sheet: number, kind: ChartKind, range: Range): Promise<ChartInfo>;
+  /** Grava o novo estado de um gráfico (tipo, título, dados ou posição). */
+  updateChart(chart: ChartInfo): Promise<ChartInfo>;
+  deleteChart(id: number): Promise<void>;
   undo(): Promise<void>;
   redo(): Promise<void>;
 }
@@ -414,6 +449,26 @@ class TauriEngine implements Engine {
 
   applyFilter(sheet: number, range: Range, col: number, allowed: string[]): Promise<number> {
     return invoke("apply_filter", { sheet, range, col, allowed });
+  }
+
+  dataRegion(sheet: number, col: number, row: number): Promise<Range> {
+    return invoke("data_region", { sheet, col, row });
+  }
+
+  charts(sheet: number): Promise<ChartInfo[]> {
+    return invoke("list_charts", { sheet });
+  }
+
+  addChart(sheet: number, kind: ChartKind, range: Range): Promise<ChartInfo> {
+    return invoke("add_chart", { sheet, kind, range });
+  }
+
+  updateChart(chart: ChartInfo): Promise<ChartInfo> {
+    return invoke("update_chart", { chart });
+  }
+
+  deleteChart(id: number): Promise<void> {
+    return invoke("delete_chart", { id });
   }
 
   undo(): Promise<void> {
@@ -642,6 +697,24 @@ class PreviewEngine implements Engine {
   async applyFilter(): Promise<number> {
     return 0;
   }
+
+  async dataRegion(_sheet: number, col: number, row: number): Promise<Range> {
+    return { col, row, cols: 1, rows: 1 };
+  }
+
+  async charts(): Promise<ChartInfo[]> {
+    return [];
+  }
+
+  async addChart(): Promise<ChartInfo> {
+    throw new Error("a pré-visualização não tem gráficos");
+  }
+
+  async updateChart(chart: ChartInfo): Promise<ChartInfo> {
+    return chart;
+  }
+
+  async deleteChart(): Promise<void> {}
 
   async undo(): Promise<void> {}
 

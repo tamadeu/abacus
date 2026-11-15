@@ -7,12 +7,14 @@ name = "abacus-desktop"
 version = "0.1.0"
 dependencies = [
  "ironcalc",
+ "quick-xml 0.42.0",
  "serde",
  "serde_json",
  "tauri",
  "tauri-build",
  "tauri-plugin-clipboard-manager",
  "tauri-plugin-dialog",
+ "zip",
 ]
 
 [[package]]

@@ -1,13 +1,15 @@
 //! Casca desktop do Abacus: guarda a pasta de trabalho aberta e expõe o
 //! motor de planilhas para a interface por meio de comandos do Tauri.
 
+mod charts;
 mod engine;
 
 use std::path::PathBuf;
 use std::sync::Mutex;
 
+use charts::{Chart, ChartKind};
 use engine::{
-    Axis, BorderKind, CellPos, Direction, Engine, FillAxis, FilterOptions, Range, SheetInfo, Stats, Structure,
+    Axis, BorderKind, CellPos, ChartView, Direction, Engine, FillAxis, FilterOptions, Range, SheetInfo, Stats, Structure,
     StyleProperty, View,
 };
 use tauri::{AppHandle, State};
@@ -274,6 +276,36 @@ fn export_csv(state: State<'_, AppState>, sheet: u32, path: String) -> Result<()
     state.with(|engine| engine.save_csv(sheet, &path))
 }
 
+/// O bloco de dados contínuo em volta de uma célula.
+#[tauri::command]
+fn data_region(state: State<'_, AppState>, sheet: u32, col: u32, row: u32) -> Result<Range, String> {
+    state.with(|engine| engine.data_region(sheet, col, row))
+}
+
+/// Gráficos de uma planilha, com os dados que mostram.
+#[tauri::command]
+fn list_charts(state: State<'_, AppState>, sheet: u32) -> Result<Vec<ChartView>, String> {
+    state.with(|engine| Ok(engine.charts(sheet)))
+}
+
+/// Cria um gráfico com os dados do intervalo.
+#[tauri::command]
+fn add_chart(state: State<'_, AppState>, sheet: u32, kind: ChartKind, range: Range) -> Result<ChartView, String> {
+    state.with(|engine| engine.add_chart(sheet, kind, range))
+}
+
+/// Grava o novo estado de um gráfico.
+#[tauri::command]
+fn update_chart(state: State<'_, AppState>, chart: Chart) -> Result<ChartView, String> {
+    state.with(|engine| engine.update_chart(chart))
+}
+
+/// Apaga um gráfico.
+#[tauri::command]
+fn delete_chart(state: State<'_, AppState>, id: u32) -> Result<(), String> {
+    state.with(|engine| engine.delete_chart(id))
+}
+
 /// Contagem e soma das células da seleção.
 #[tauri::command]
 fn selection_stats(state: State<'_, AppState>, sheet: u32, range: Range) -> Result<Stats, String> {
@@ -322,6 +354,11 @@ pub fn run() {
             set_border,
             change_structure,
             fill_cells,
+            data_region,
+            list_charts,
+            add_chart,
+            update_chart,
+            delete_chart,
             set_frozen,
             set_hidden,
             find_cells,

@@ -20,6 +20,11 @@ Projeto no início. O que já funciona:
 - Importar e exportar CSV: ao abrir, o separador (`;`, tabulação ou `,`) e a
   codificação (UTF-8 ou Windows-1252) são detectados; ao salvar como `.csv`,
   sai só a planilha ativa, com os valores como aparecem, separados por `;`.
+- Gráficos de colunas, barras, linhas e pizza (aba Inserir): vêm da seleção
+  ou da tabela em volta da célula ativa e acompanham os valores. Arraste para
+  mover, use a alça do canto para redimensionar, Delete para apagar; dois
+  cliques (ou botão direito) abrem título, tipo e intervalo de dados. Vão para
+  o `.xlsx` como gráficos nativos do Excel e voltam ao abrir o arquivo.
 - Barra de status com média, contagem e soma da seleção.
 - A coluna alarga sozinha quando o número digitado não cabe.
 - Atalhos de navegação: Ctrl+setas, Ctrl+Home, Ctrl+End, Home, PageUp e
@@ -85,7 +90,11 @@ Limitações conhecidas:
 - A lista de funções sugere só os nomes, sem descrição nem argumentos.
 - Clicar para inserir referência só funciona dentro da mesma planilha.
 - Colar para outros programas leva só os valores, sem formatação.
-- Tipo de fonte e gráficos do arquivo ainda não aparecem na grade.
+- O tipo de fonte do arquivo ainda não aparece na grade.
+- Gráficos: só colunas, barras, linhas e pizza (os de outros tipos, como
+  dispersão ou área, somem ao salvar); ficam presos a células, então não
+  acompanham linhas e colunas inseridas ou excluídas; criar, mover ou apagar
+  um gráfico não entra no desfazer; empilhados viram agrupados.
 - As bordas aplicadas pela barra são sempre finas e pretas; as do arquivo
   aparecem com cor e espessura, mas a dupla é desenhada como grossa.
 - Bordas e mesclagem não funcionam numa linha ou coluna inteira.
@@ -134,7 +143,7 @@ cargo test
 
 1. Propor o português do Brasil ao IronCalc original.
 2. Versão web com o motor em WebAssembly.
-3. Gráficos.
+3. Formatação condicional, validação de dados e tabelas dinâmicas.
 
 ## Licença
 
