@@ -2,6 +2,7 @@ import {
   createEngine,
   type BorderKind,
   type CellView,
+  type Direction,
   type FilterOptions,
   type Range,
   type SheetInfo,
@@ -19,6 +20,8 @@ const MAX_ROWS = 1_048_576;
 const FONT = "Inter, system-ui, sans-serif";
 /** Espaço entre o texto e a borda da célula. */
 const PADDING = 8;
+/** Largura padrão de uma coluna, igual à do motor. Só colunas com ela se alargam sozinhas. */
+const DEFAULT_COL_WIDTH = 90;
 /** Distância, em pixels, em que o mouse "pega" a borda de um cabeçalho. */
 const GRIP = 4;
 /** Menor largura de coluna ou altura de linha ao arrastar. */
@@ -71,6 +74,7 @@ const filterValues = $("#filter-values");
 /** Estilos que a barra de ferramentas liga e desliga. */
 type ToggleProperty = "bold" | "italic" | "underline" | "strike" | "wrap";
 const statusEl = $("#status");
+const statsEl = $("#stats");
 const docName = $("#doc-name");
 const docState = $("#doc-state");
 const sheetTabs = $("#sheet-tabs");
@@ -833,6 +837,39 @@ function syncFormulaBar() {
   else if (range.cols === MAX_COLS) nameBox.textContent = `${range.row + 1}:${last.row + 1}`;
   else nameBox.textContent = singleSelection() ? cellName(anchor) : `${cellName(range)}:${cellName(last)}`;
   if (!dirty) fx.value = cells.get(key(anchor.col, anchor.row))?.input ?? "";
+  scheduleStats();
+}
+
+const numberFormat = new Intl.NumberFormat("pt-BR", { maximumFractionDigits: 10 });
+let statsTimer: number | undefined;
+/** Número do pedido de estatísticas mais recente, para descartar respostas atrasadas. */
+let statsRequest = 0;
+
+/**
+ * Atualiza o resumo da seleção no rodapé (média, contagem e soma). Espera a
+ * seleção sossegar para não pedir contas a cada movimento do mouse.
+ */
+function scheduleStats() {
+  window.clearTimeout(statsTimer);
+  const request = ++statsRequest;
+  if (singleSelection()) {
+    statsEl.textContent = "";
+    return;
+  }
+  statsTimer = window.setTimeout(async () => {
+    try {
+      const stats = await engine.stats(sheet, selectedRange());
+      if (request !== statsRequest) return;
+      if (stats.numbers > 0) {
+        const average = stats.sum / stats.numbers;
+        statsEl.textContent = `Média: ${numberFormat.format(average)}  ·  Contagem: ${stats.count}  ·  Soma: ${numberFormat.format(stats.sum)}`;
+      } else {
+        statsEl.textContent = stats.count > 1 ? `Contagem: ${stats.count}` : "";
+      }
+    } catch {
+      if (request === statsRequest) statsEl.textContent = "";
+    }
+  }, 80);
 }
 
 /** Faz a barra de ferramentas refletir o estilo da célula ativa. */
@@ -958,6 +995,38 @@ async function move(dx: number, dy: number) {
   }
 }
 
+const DIRECTIONS: Record<string, Direction> = { ArrowLeft: "left", ArrowRight: "right", ArrowUp: "up", ArrowDown: "down" };
+
+/**
+ * Ctrl+seta salta até a borda do bloco de dados; Ctrl+Home vai a A1 e
+ * Ctrl+End à última célula preenchida. Com Shift a seleção cresce até lá.
+ */
+async function jumpTo(keyName: string, extend: boolean) {
+  try {
+    const from = extend ? pos.focus : pos.anchor;
+    let target: Cell;
+    if (keyName === "Home") target = { col: 0, row: 0 };
+    else if (keyName === "End") target = await engine.lastCell(sheet);
+    else target = await engine.jump(sheet, from.col, from.row, DIRECTIONS[keyName]);
+    await select(target, extend);
+  } catch (error) {
+    statusEl.textContent = `Erro ao mover: ${error}`;
+  }
+}
+
+/** Home vai ao começo da linha; PageUp e PageDown andam uma tela, rolando junto. */
+async function pageTo(keyName: string, extend: boolean) {
+  const from = extend ? pos.focus : pos.anchor;
+  if (keyName === "Home") {
+    await select({ col: 0, row: from.row }, extend);
+    return;
+  }
+  const rows = Math.max(1, rowHeights.length - frozen.rows - 1);
+  const dir = keyName === "PageDown" ? 1 : -1;
+  pos.origin.row = Math.max(frozen.rows, clamp(pos.origin.row + dir * rows, MAX_ROWS - 1));
+  await select({ col: from.col, row: clamp(from.row + dir * rows, MAX_ROWS - 1) }, extend);
+}
+
 /** Grava o texto da barra de fórmulas na célula ativa. */
 async function write(): Promise<boolean> {
   const { anchor } = pos;
@@ -988,6 +1057,7 @@ async function commit(moveCols: number, moveRows: number) {
   canvas.focus();
   await move(moveCols, moveRows);
   await fitRow(edited);
+  await fitColumn(edited);
 }
 
 /** Aplica uma propriedade de estilo à seleção. */
@@ -1023,6 +1093,27 @@ async function fitRow(cell: Cell) {
     await engine.setRowHeight(sheet, cell.row, Math.min(needed, 2000));
   } catch (error) {
     statusEl.textContent = `Erro ao ajustar a altura da linha: ${error}`;
+  }
+  await refresh();
+}
+
+/**
+ * Alarga a coluna se um número digitado não couber nela e ela ainda tiver a
+ * largura padrão, como o Excel faz; assim o número não vira uma fileira de
+ * "#". Colunas que a pessoa ajustou à mão ficam como estão.
+ */
+async function fitColumn(cell: Cell) {
+  const view = cells.get(key(cell.col, cell.row));
+  if (!view || view.kind !== "number" || mergeAt(cell) || !colOnScreen(cell.col)) return;
+  const width = colWidths[colBand(cell.col)];
+  if (width !== DEFAULT_COL_WIDTH) return;
+  ctx.font = cellFont(view);
+  const needed = Math.ceil(ctx.measureText(view.display).width) + 2 * PADDING + 2;
+  if (needed <= width) return;
+  try {
+    await engine.setColWidth(sheet, cell.col, Math.min(needed, 600));
+  } catch (error) {
+    statusEl.textContent = `Erro ao ajustar a largura da coluna: ${error}`;
   }
   await refresh();
 }
@@ -1536,17 +1627,31 @@ async function addSheet() {
   }
 }
 
+/**
+ * Resolve as alterações não salvas antes de uma ação que as perderia: pergunta
+ * se salva, descarta ou cancela. Devolve se a ação pode seguir.
+ */
+async function settleChanges(): Promise<boolean> {
+  if (!modified) return true;
+  const choice = await engine.askToSave(docName.textContent ?? "Sem título");
+  if (choice === "cancel") return false;
+  if (choice === "save") await saveFile(false);
+  // Salvar pode ter sido cancelado na escolha do arquivo, ou ter falhado.
+  return choice === "discard" || !modified;
+}
+
 async function openFile() {
   const files = engine.files;
   if (!files) return;
   if (!(await write())) return;
   try {
-    if (modified && !(await engine.confirm("As alterações não salvas serão perdidas. Continuar?", "Descartar alterações"))) {
-      return;
-    }
+    if (!(await settleChanges())) return;
     const path = await files.open();
     if (path === null) return;
-    filePath = path;
+    // Um CSV vira uma pasta nova: salvar pede um nome .xlsx, e o CSV de
+    // origem fica como estava.
+    const imported = path.toLowerCase().endsWith(".csv");
+    filePath = imported ? null : path;
     modified = false;
     copiedMark = null;
     positions = new Map();
@@ -1567,11 +1672,16 @@ async function saveFile(askWhere: boolean) {
   if (!files) return;
   if (!(await write())) return;
   try {
-    const path = await files.save(askWhere ? null : filePath);
+    const path = await files.save(askWhere ? null : filePath, sheet);
     if (path === null) return;
-    filePath = path;
-    modified = false;
-    statusEl.textContent = "Arquivo salvo";
+    if (path.toLowerCase().endsWith(".csv")) {
+      // Exportar não troca o documento aberto, e o CSV leva só a planilha atual.
+      statusEl.textContent = "Planilha exportada como CSV (só os valores, sem formatação)";
+    } else {
+      filePath = path;
+      modified = false;
+      statusEl.textContent = "Arquivo salvo";
+    }
     syncDocument();
   } catch (error) {
     statusEl.textContent = `Erro ao salvar o arquivo: ${error}`;
@@ -1883,6 +1993,12 @@ canvas.addEventListener("keydown", (event) => {
   } else if (shortcut && toggles[letter] && engine.formatting) {
     event.preventDefault();
     void toggle(toggles[letter]);
+  } else if (shortcut && (arrow || event.key === "Home" || event.key === "End")) {
+    event.preventDefault();
+    void jumpTo(event.key, event.shiftKey);
+  } else if (event.key === "Home" || event.key === "PageUp" || event.key === "PageDown") {
+    event.preventDefault();
+    void pageTo(event.key, event.shiftKey);
   } else if (arrow) {
     event.preventDefault();
     // Com Shift a seleção cresce a partir do foco; sem ele, anda a célula ativa.
@@ -2172,6 +2288,14 @@ for (const tab of tabs) {
     selectTab(tabs[(tabs.indexOf(tab) + shift + tabs.length) % tabs.length], true);
   });
 }
+
+// Fechar a janela com alterações não salvas pergunta antes. Uma edição em
+// andamento entra no documento primeiro; se ela for inválida, as alterações
+// anteriores ainda são oferecidas para salvar.
+engine.onClose(async () => {
+  await write();
+  return settleChanges();
+});
 
 $("#open-btn").addEventListener("click", () => void openFile());
 $("#save-btn").addEventListener("click", () => void saveFile(false));

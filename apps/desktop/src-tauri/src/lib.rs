@@ -7,7 +7,8 @@ use std::path::PathBuf;
 use std::sync::Mutex;
 
 use engine::{
-    Axis, BorderKind, CellPos, Engine, FillAxis, FilterOptions, Range, SheetInfo, Structure, StyleProperty, View,
+    Axis, BorderKind, CellPos, Direction, Engine, FillAxis, FilterOptions, Range, SheetInfo, Stats, Structure,
+    StyleProperty, View,
 };
 use tauri::{AppHandle, State};
 use tauri_plugin_clipboard_manager::ClipboardExt;
@@ -24,11 +25,15 @@ impl AppState {
     }
 }
 
-/// Confere se o caminho termina em `.xlsx`, o único formato aceito.
-fn xlsx_path(path: String) -> Result<PathBuf, String> {
+/// Confere se o caminho termina na extensão pedida.
+fn path_with_extension(path: String, extension: &str, message: &str) -> Result<PathBuf, String> {
     let path = PathBuf::from(path);
-    let is_xlsx = path.extension().is_some_and(|ext| ext.eq_ignore_ascii_case("xlsx"));
-    if is_xlsx { Ok(path) } else { Err("o Abacus só abre e salva arquivos .xlsx".into()) }
+    if path.extension().is_some_and(|ext| ext.eq_ignore_ascii_case(extension)) { Ok(path) } else { Err(message.into()) }
+}
+
+/// Confere se o caminho termina em `.xlsx`, o único formato em que se salva a pasta.
+fn xlsx_path(path: String) -> Result<PathBuf, String> {
+    path_with_extension(path, "xlsx", "o Abacus só salva a pasta de trabalho em arquivos .xlsx")
 }
 
 /// Grava o conteúdo de uma célula. Texto vazio apaga a célula.
@@ -250,11 +255,47 @@ fn redo(state: State<'_, AppState>) -> Result<(), String> {
 /// Se o arquivo não puder ser lido, a pasta atual continua aberta.
 #[tauri::command]
 fn open_file(state: State<'_, AppState>, path: String) -> Result<(), String> {
-    let opened = Engine::open(&xlsx_path(path)?)?;
+    let path = PathBuf::from(path);
+    let opened = match path.extension().and_then(|ext| ext.to_str()).map(str::to_ascii_lowercase).as_deref() {
+        Some("xlsx") => Engine::open(&path)?,
+        Some("csv") => Engine::from_csv(&path)?,
+        _ => return Err("o Abacus só abre arquivos .xlsx e .csv".into()),
+    };
     state.with(|engine| {
         *engine = opened;
         Ok(())
     })
+}
+
+/// Grava uma planilha como CSV, sem alterar a pasta aberta.
+#[tauri::command]
+fn export_csv(state: State<'_, AppState>, sheet: u32, path: String) -> Result<(), String> {
+    let path = path_with_extension(path, "csv", "o arquivo precisa terminar em .csv")?;
+    state.with(|engine| engine.save_csv(sheet, &path))
+}
+
+/// Contagem e soma das células da seleção.
+#[tauri::command]
+fn selection_stats(state: State<'_, AppState>, sheet: u32, range: Range) -> Result<Stats, String> {
+    state.with(|engine| engine.stats(sheet, range))
+}
+
+/// Para onde vai a célula ativa com Ctrl+seta.
+#[tauri::command]
+fn jump_cell(
+    state: State<'_, AppState>,
+    sheet: u32,
+    col: u32,
+    row: u32,
+    direction: Direction,
+) -> Result<CellPos, String> {
+    state.with(|engine| engine.jump(sheet, col, row, direction))
+}
+
+/// A última célula preenchida da planilha.
+#[tauri::command]
+fn last_cell(state: State<'_, AppState>, sheet: u32) -> Result<CellPos, String> {
+    state.with(|engine| engine.last_cell(sheet))
 }
 
 /// Salva a pasta de trabalho num arquivo `.xlsx`.
@@ -300,7 +341,11 @@ pub fn run() {
             undo,
             redo,
             open_file,
-            save_file
+            save_file,
+            export_csv,
+            selection_stats,
+            jump_cell,
+            last_cell
         ])
         .run(tauri::generate_context!())
         .expect("erro ao iniciar o Abacus");

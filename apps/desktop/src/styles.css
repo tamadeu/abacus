@@ -463,9 +463,22 @@ footer {
   padding: 6px 0;
 }
 
-#status {
-  margin-left: auto;
+#status,
+#stats {
   font-size: 12px;
   color: var(--muted);
   white-space: nowrap;
+}
+
+#stats {
+  margin-left: auto;
+}
+
+#stats:not(:empty) + #status {
+  padding-left: 16px;
+  border-left: 1px solid var(--line);
+}
+
+#stats:empty + #status {
+  margin-left: auto;
 }

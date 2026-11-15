@@ -1,5 +1,6 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
-import { ask, open, save } from "@tauri-apps/plugin-dialog";
+import { getCurrentWindow } from "@tauri-apps/api/window";
+import { ask, message, open, save } from "@tauri-apps/plugin-dialog";
 
 /** Parte do estilo de uma célula que a grade sabe desenhar. */
 export interface CellStyle {
@@ -53,6 +54,21 @@ export interface CellView {
 }
 
 /** O pedaço de uma planilha que cabe na tela. */
+/** Contas sobre as células de uma seleção, para a barra de status. */
+export interface Stats {
+  /** Células com algum conteúdo. */
+  count: number;
+  /** Células cujo valor é um número (datas incluídas). */
+  numbers: number;
+  sum: number;
+}
+
+/** Direção de um salto até a borda de um bloco de dados (Ctrl+seta). */
+export type Direction = "left" | "right" | "up" | "down";
+
+/** O que fazer com as alterações não salvas. */
+export type SaveChoice = "save" | "discard" | "cancel";
+
 export interface View {
   /** Quantas colunas, a partir da primeira da planilha, ficam congeladas à esquerda. */
   frozenCols: number;
@@ -136,10 +152,17 @@ export interface SheetInfo {
 
 /** Abrir e salvar arquivos, com os diálogos do sistema. */
 export interface FileAccess {
-  /** Pergunta qual arquivo abrir e o carrega. Devolve o caminho, ou `null` se a pessoa cancelou. */
+  /**
+   * Pergunta qual arquivo abrir (`.xlsx` ou `.csv`) e o carrega. Devolve o
+   * caminho, ou `null` se a pessoa cancelou.
+   */
   open(): Promise<string | null>;
-  /** Salva em `path`; sem caminho, pergunta onde. Devolve o caminho usado, ou `null` se a pessoa cancelou. */
-  save(path: string | null): Promise<string | null>;
+  /**
+   * Salva em `path`; sem caminho, pergunta onde. Se o caminho termina em
+   * `.csv`, grava só a planilha `sheet`, como texto. Devolve o caminho usado,
+   * ou `null` se a pessoa cancelou.
+   */
+  save(path: string | null, sheet: number): Promise<string | null>;
 }
 
 /**
@@ -158,7 +181,17 @@ export interface Engine {
   readonly tables: boolean;
   /** Pede confirmação para uma ação que não dá para desfazer sem perda. `okLabel` é o texto do botão que confirma. */
   confirm(message: string, okLabel: string): Promise<boolean>;
+  /** Pergunta se o documento `name`, com alterações não salvas, deve ser salvo. */
+  askToSave(name: string): Promise<SaveChoice>;
+  /** Registra o que fazer quando a janela for fechada: `handler` devolve se pode fechar. */
+  onClose(handler: () => Promise<boolean>): void;
   sheets(): Promise<SheetInfo[]>;
+  /** Contagem e soma das células da seleção. */
+  stats(sheet: number, range: Range): Promise<Stats>;
+  /** Para onde vai a célula ativa com Ctrl+seta. */
+  jump(sheet: number, col: number, row: number, direction: Direction): Promise<CellPos>;
+  /** A última célula da planilha que tem algo, de baixo e à direita. */
+  lastCell(sheet: number): Promise<CellPos>;
   /** Cria uma planilha vazia e devolve o índice dela. */
   addSheet(): Promise<number>;
   renameSheet(sheet: number, name: string): Promise<void>;
@@ -218,7 +251,9 @@ export interface Engine {
   redo(): Promise<void>;
 }
 
-const XLSX_FILTER = [{ name: "Pasta de trabalho do Excel", extensions: ["xlsx"] }];
+const XLSX_FILTER = { name: "Pasta de trabalho do Excel", extensions: ["xlsx"] };
+const CSV_FILTER = { name: "Texto separado por ponto e vírgula (CSV)", extensions: ["csv"] };
+const OPEN_FILTER = { name: "Planilhas", extensions: ["xlsx", "csv"] };
 
 /** Motor IronCalc, em Rust, chamado pelos comandos do Tauri. */
 class TauriEngine implements Engine {
@@ -228,14 +263,18 @@ class TauriEngine implements Engine {
 
   readonly files: FileAccess = {
     async open() {
-      const path = await open({ multiple: false, directory: false, filters: XLSX_FILTER });
+      const path = await open({ multiple: false, directory: false, filters: [OPEN_FILTER, XLSX_FILTER, CSV_FILTER] });
       if (path === null) return null;
       await invoke("open_file", { path });
       return path;
     },
-    async save(path) {
-      let target = path ?? (await save({ filters: XLSX_FILTER, defaultPath: "Sem título.xlsx" }));
+    async save(path, sheet) {
+      let target = path ?? (await save({ filters: [XLSX_FILTER, CSV_FILTER], defaultPath: "Sem título.xlsx" }));
       if (target === null) return null;
+      if (target.toLowerCase().endsWith(".csv")) {
+        await invoke("export_csv", { sheet, path: target });
+        return target;
+      }
       if (!target.toLowerCase().endsWith(".xlsx")) target += ".xlsx";
       await invoke("save_file", { path: target });
       return target;
@@ -244,6 +283,37 @@ class TauriEngine implements Engine {
 
   confirm(message: string, okLabel: string): Promise<boolean> {
     return ask(message, { title: "Abacus", kind: "warning", okLabel, cancelLabel: "Cancelar" });
+  }
+
+  stats(sheet: number, range: Range): Promise<Stats> {
+    return invoke("selection_stats", { sheet, range });
+  }
+
+  jump(sheet: number, col: number, row: number, direction: Direction): Promise<CellPos> {
+    return invoke("jump_cell", { sheet, col, row, direction });
+  }
+
+  lastCell(sheet: number): Promise<CellPos> {
+    return invoke("last_cell", { sheet });
+  }
+
+  async askToSave(name: string): Promise<SaveChoice> {
+    const labels = { yes: "Salvar", no: "Não salvar", cancel: "Cancelar" };
+    const answer = await message(`Salvar as alterações em "${name}"?`, {
+      title: "Abacus",
+      kind: "warning",
+      buttons: labels,
+    });
+    if (answer === labels.yes || answer === "Yes") return "save";
+    if (answer === labels.no || answer === "No") return "discard";
+    return "cancel";
+  }
+
+  onClose(handler: () => Promise<boolean>): void {
+    // Se o `handler` não impedir, a janela se fecha sozinha depois dele.
+    void getCurrentWindow().onCloseRequested(async (event) => {
+      if (!(await handler())) event.preventDefault();
+    });
   }
 
   renameSheet(sheet: number, name: string): Promise<void> {
@@ -381,6 +451,35 @@ class PreviewEngine implements Engine {
   async confirm(message: string): Promise<boolean> {
     return window.confirm(message);
   }
+
+  async askToSave(): Promise<SaveChoice> {
+    return "discard";
+  }
+
+  async stats(sheet: number, range: Range): Promise<Stats> {
+    const stats: Stats = { count: 0, numbers: 0, sum: 0 };
+    for (const [key, cell] of this.cells) {
+      if (!key.startsWith(`${sheet}:`)) continue;
+      const inside = cell.col >= range.col && cell.col < range.col + range.cols && cell.row >= range.row && cell.row < range.row + range.rows;
+      if (!inside || cell.input === "") continue;
+      stats.count++;
+      if (cell.kind === "number") {
+        stats.numbers++;
+        stats.sum += Number(cell.display.replace(",", "."));
+      }
+    }
+    return stats;
+  }
+
+  async jump(_sheet: number, col: number, row: number): Promise<CellPos> {
+    return { col, row };
+  }
+
+  async lastCell(): Promise<CellPos> {
+    return { col: 0, row: 0 };
+  }
+
+  onClose(): void {}
 
   async addSheet(): Promise<number> {
     this.names.push(`Planilha${this.names.length + 1}`);

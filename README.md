@@ -16,7 +16,14 @@ como moeda.
 Projeto no início. O que já funciona:
 
 - Abrir e salvar arquivos `.xlsx` (Ctrl+O, Ctrl+S, Ctrl+Shift+S), com aviso
-  antes de descartar alterações não salvas.
+  antes de descartar alterações não salvas, inclusive ao fechar a janela.
+- Importar e exportar CSV: ao abrir, o separador (`;`, tabulação ou `,`) e a
+  codificação (UTF-8 ou Windows-1252) são detectados; ao salvar como `.csv`,
+  sai só a planilha ativa, com os valores como aparecem, separados por `;`.
+- Barra de status com média, contagem e soma da seleção.
+- A coluna alarga sozinha quando o número digitado não cabe.
+- Atalhos de navegação: Ctrl+setas, Ctrl+Home, Ctrl+End, Home, PageUp e
+  PageDown (com Shift estendem a seleção).
 - Várias planilhas por arquivo: criar, renomear (dois cliques na aba) e
   excluir, com fórmulas entre planilhas.
 - Grade desenhada em canvas, com rolagem e seleção de uma célula ou de um
@@ -72,8 +79,8 @@ Limitações conhecidas:
 - Os nomes em português de algumas funções muito recentes do Excel
   (`MAPA`, `REGEX.TESTAR`, `PORCENTAGEMDE`, `APARARINTERVALO`) vieram da
   documentação da Microsoft e não foram conferidos num Excel em português.
-- A coluna não alarga sozinha quando o número digitado não cabe; ele aparece
-  como `####` até a coluna ser ajustada.
+- Não há zoom.
+- CSV não guarda formatação nem várias planilhas.
 - As referências coloridas aparecem na grade, mas não no texto da fórmula.
 - A lista de funções sugere só os nomes, sem descrição nem argumentos.
 - Clicar para inserir referência só funciona dentro da mesma planilha.
@@ -87,7 +94,6 @@ Limitações conhecidas:
   guarda a configuração de filtro, só as linhas ocultas.
 - Classificar não aceita várias colunas de critério nem linhas ocultas no
   intervalo.
-- Fechar a janela não avisa sobre alterações não salvas.
 - Arquivos gerados pela biblioteca openpyxl mostram `0` em células vazias que
   só têm estilo. É um defeito do importador do IronCalc com células gravadas
   como `t="n"` sem valor; arquivos no formato que o Excel grava não têm o

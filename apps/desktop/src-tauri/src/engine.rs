@@ -14,6 +14,7 @@ use ironcalc::base::UserModel;
 use ironcalc::base::cell::CellValue;
 use ironcalc::base::expressions::types::Area;
 use ironcalc::base::types::{BorderItem, BorderStyle, CellType, Color, HorizontalAlignment, Style, VerticalAlignment};
+use ironcalc::base::worksheet::NavigationDirection;
 use ironcalc::export::save_xlsx_to_writer;
 use ironcalc::import::load_from_xlsx;
 use serde::{Deserialize, Serialize};
@@ -24,10 +25,10 @@ const LOCALE: &str = "pt";
 /// Idioma dos nomes de função e dos erros (`SOMA`, `#NOME?`), do mesmo fork.
 const LANGUAGE: &str = "pt";
 const TIMEZONE: &str = "America/Sao_Paulo";
-/// Limites de quantas colunas e linhas uma única tela pode pedir, para o
-/// caso de muitas delas estarem ocultas (largura ou altura zero).
 /// Máximo de linhas ou colunas ocultadas de uma vez.
 const MAX_HIDE: i64 = 100_000;
+/// Limites de quantas colunas e linhas uma única tela pode pedir, para o
+/// caso de muitas delas estarem ocultas (largura ou altura zero).
 const MAX_VIEW_COLS: usize = 500;
 const MAX_VIEW_ROWS: usize = 2000;
 
@@ -51,6 +52,26 @@ pub struct View {
     pub cells: Vec<CellView>,
     /// Áreas mescladas que aparecem na tela.
     pub merges: Vec<Range>,
+}
+
+/// Contas sobre as células de uma seleção, para a barra de status.
+#[derive(Debug, Default, PartialEq, Serialize)]
+pub struct Stats {
+    /// Células com algum conteúdo.
+    pub count: u32,
+    /// Células cujo valor é um número (datas incluídas).
+    pub numbers: u32,
+    pub sum: f64,
+}
+
+/// Direção de uma viagem até a borda de um bloco de dados (Ctrl+seta).
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Direction {
+    Left,
+    Right,
+    Up,
+    Down,
 }
 
 /// Posição de uma célula, a partir de zero.
@@ -295,6 +316,41 @@ impl Engine {
         Ok(Self { model, copied: None })
     }
 
+    /// Abre um arquivo CSV como uma pasta nova, com uma planilha só. Aceita
+    /// `;`, vírgula ou tabulação, texto em UTF-8 (com ou sem BOM) ou Windows-1252.
+    pub fn from_csv(path: &Path) -> Result<Self, String> {
+        let bytes = fs::read(path).map_err(|e| format!("não foi possível ler o arquivo: {e}"))?;
+        let text = decode_text(&bytes);
+        let records = parse_csv(&text, detect_delimiter(&text));
+        if records.len() > MAX_ROWS as usize || records.iter().any(|record| record.len() > MAX_COLS as usize) {
+            return Err("o arquivo tem mais linhas ou colunas do que uma planilha comporta".into());
+        }
+        let mut engine = Self::new()?;
+        if !records.is_empty() {
+            // O motor lê texto separado por tabulações; é o mesmo caminho da colagem.
+            let area = Area { sheet: 0, row: 1, column: 1, width: 1, height: 1 };
+            engine.model.paste_csv_string(&area, &write_csv(records.iter().map(Vec::as_slice), '\t'))?;
+        }
+        Ok(engine)
+    }
+
+    /// Grava a planilha como CSV: o que a grade mostra, separado por `;`
+    /// (como o Excel em português), em UTF-8 com BOM para o Excel acertar os acentos.
+    pub fn save_csv(&self, sheet: u32, path: &Path) -> Result<(), String> {
+        let dimension = self.model.get_model().workbook.worksheet(sheet)?.dimension();
+        let mut rows = Vec::new();
+        for row in 1..=dimension.max_row {
+            let mut fields = Vec::new();
+            for col in 1..=dimension.max_column {
+                fields.push(self.model.get_formatted_cell_value(sheet, row, col)?);
+            }
+            rows.push(fields);
+        }
+        let mut data = vec![0xEF, 0xBB, 0xBF];
+        data.extend(write_csv(rows.iter().map(Vec::as_slice), ';').into_bytes());
+        fs::write(path, data).map_err(|e| format!("não foi possível gravar o arquivo: {e}"))
+    }
+
     /// Salva a pasta como `.xlsx`, substituindo o arquivo se já existir.
     pub fn save(&self, path: &Path) -> Result<(), String> {
         let buffer = save_xlsx_to_writer(self.model.get_model(), Cursor::new(Vec::new()))
@@ -429,6 +485,58 @@ impl Engine {
             cells,
             merges,
         })
+    }
+
+    /// Contagem e soma das células da seleção que têm algo. Só olha as
+    /// células que existem, então uma coluna inteira custa o mesmo que os dados dela.
+    pub fn stats(&self, sheet: u32, range: Range) -> Result<Stats, String> {
+        let (first_row, first_col) = to_ironcalc(range.col, range.row)?;
+        let last_row = first_row.saturating_add(to_i32(range.rows)?) - 1;
+        let last_col = first_col.saturating_add(to_i32(range.cols)?) - 1;
+        let positions: Vec<(i32, i32)> = {
+            let worksheet = self.model.get_model().workbook.worksheet(sheet)?;
+            worksheet
+                .sheet_data
+                .cells()
+                .filter(|(row, col, _)| (first_row..=last_row).contains(row) && (first_col..=last_col).contains(col))
+                .map(|(row, col, _)| (row, col))
+                .collect()
+        };
+        let mut stats = Stats::default();
+        for (row, col) in positions {
+            match self.model.get_model().get_cell_value_by_index(sheet, row, col)? {
+                CellValue::None => {}
+                CellValue::Number(number) => {
+                    stats.count += 1;
+                    stats.numbers += 1;
+                    stats.sum += number;
+                }
+                _ => stats.count += 1,
+            }
+        }
+        Ok(stats)
+    }
+
+    /// Para onde vai a célula ativa com Ctrl+seta: até a última célula
+    /// preenchida do bloco em que está ou, se está num vazio ou no fim de um
+    /// bloco, até a próxima preenchida; sem nenhuma, até a borda da planilha.
+    pub fn jump(&self, sheet: u32, col: u32, row: u32, direction: Direction) -> Result<CellPos, String> {
+        let (row, col) = to_ironcalc(col, row)?;
+        let direction = match direction {
+            Direction::Left => NavigationDirection::Left,
+            Direction::Right => NavigationDirection::Right,
+            Direction::Up => NavigationDirection::Up,
+            Direction::Down => NavigationDirection::Down,
+        };
+        let (row, col) =
+            self.model.get_model().workbook.worksheet(sheet)?.navigate_to_edge_in_direction(row, col, direction)?;
+        Ok(CellPos { col: (col - 1) as u32, row: (row - 1) as u32 })
+    }
+
+    /// A última célula da planilha que tem algo, de baixo e à direita (Ctrl+End).
+    pub fn last_cell(&self, sheet: u32) -> Result<CellPos, String> {
+        let dimension = self.model.get_model().workbook.worksheet(sheet)?.dimension();
+        Ok(CellPos { col: (dimension.max_column - 1) as u32, row: (dimension.max_row - 1) as u32 })
     }
 
     /// Congela as primeiras `cols` colunas e `rows` linhas; zero descongela.
@@ -1002,6 +1110,117 @@ fn sizes(
         }
     }
     Ok(sizes)
+}
+
+/// Texto de um arquivo: UTF-8 (sem o BOM) ou, se não for, Windows-1252, como
+/// os CSV que o Excel antigo grava.
+fn decode_text(bytes: &[u8]) -> String {
+    let bytes = bytes.strip_prefix(&[0xEF, 0xBB, 0xBF]).unwrap_or(bytes);
+    match std::str::from_utf8(bytes) {
+        Ok(text) => text.to_string(),
+        Err(_) => bytes.iter().map(|&byte| windows_1252(byte)).collect(),
+    }
+}
+
+/// O caractere de um byte do Windows-1252. Os bytes de 0x80 a 0x9F diferem do Latin-1.
+fn windows_1252(byte: u8) -> char {
+    const HIGH: [char; 32] = [
+        '€', '\u{81}', '‚', 'ƒ', '„', '…', '†', '‡', 'ˆ', '‰', 'Š', '‹', 'Œ', '\u{8D}', 'Ž', '\u{8F}', '\u{90}', '‘',
+        '’', '“', '”', '•', '–', '—', '˜', '™', 'š', '›', 'œ', '\u{9D}', 'ž', 'Ÿ',
+    ];
+    match byte {
+        0x80..=0x9F => HIGH[usize::from(byte - 0x80)],
+        _ => char::from(byte),
+    }
+}
+
+/// O separador que aparece mais na primeira linha, fora das aspas. Em empate
+/// vale `;`, depois tabulação, depois vírgula; sem nenhum, vírgula.
+fn detect_delimiter(text: &str) -> char {
+    let mut counts = [0usize; 3];
+    let mut quoted = false;
+    for c in text.chars() {
+        match c {
+            '"' => quoted = !quoted,
+            '\n' if !quoted => break,
+            ';' if !quoted => counts[0] += 1,
+            '\t' if !quoted => counts[1] += 1,
+            ',' if !quoted => counts[2] += 1,
+            _ => {}
+        }
+    }
+    let best = counts.iter().copied().max().unwrap_or(0);
+    match counts.iter().position(|&count| count == best && best > 0) {
+        Some(0) => ';',
+        Some(1) => '\t',
+        _ => ',',
+    }
+}
+
+/// Lê CSV (RFC 4180): campos entre aspas podem ter o separador, quebras de
+/// linha e aspas duplicadas. Uma linha em branco no fim do arquivo é ignorada.
+fn parse_csv(text: &str, delimiter: char) -> Vec<Vec<String>> {
+    let mut records = Vec::new();
+    let mut record = Vec::new();
+    let mut field = String::new();
+    let mut quoted = false;
+    let mut chars = text.chars().peekable();
+    let mut pending = false;
+    while let Some(c) = chars.next() {
+        pending = true;
+        if quoted {
+            if c == '"' {
+                if chars.peek() == Some(&'"') {
+                    field.push('"');
+                    chars.next();
+                } else {
+                    quoted = false;
+                }
+            } else {
+                field.push(c);
+            }
+        } else if c == '"' && field.is_empty() {
+            quoted = true;
+        } else if c == delimiter {
+            record.push(std::mem::take(&mut field));
+        } else if c == '\n' || c == '\r' {
+            if c == '\r' && chars.peek() == Some(&'\n') {
+                chars.next();
+            }
+            record.push(std::mem::take(&mut field));
+            records.push(std::mem::take(&mut record));
+            pending = false;
+        } else {
+            field.push(c);
+        }
+    }
+    if pending {
+        record.push(field);
+        records.push(record);
+    }
+    records
+}
+
+/// Escreve CSV: campos com o separador, aspas ou quebra de linha vão entre
+/// aspas; as linhas terminam em CRLF.
+fn write_csv<'a>(records: impl Iterator<Item = &'a [String]>, delimiter: char) -> String {
+    let mut out = String::new();
+    for record in records {
+        for (index, field) in record.iter().enumerate() {
+            if index > 0 {
+                out.push(delimiter);
+            }
+            if field.contains([delimiter, '"', '\n', '\r']) {
+                out.push('"');
+                out.push_str(&field.replace('"', "\"\""));
+                out.push('"');
+            } else {
+                out.push_str(field);
+            }
+        }
+        out.push_str("\r\n");
+    }
+    out
 }
 
 /// Posição (em bytes) e tamanho do primeiro trecho de `text` igual a `query`,
@@ -1640,6 +1859,90 @@ mod tests {
         assert_eq!(e.view(0, 0, 0, 90.0, 150.0).unwrap().row_heights[..6], [25.0; 6]);
 
         assert!(e.filter_options(0, 9, 9).is_err());
+    }
+
+    #[test]
+    fn selection_stats() {
+        let e = engine(&[(0, 0, "10"), (0, 1, "20,5"), (0, 2, "texto"), (1, 0, "=A1*2"), (3, 3, "99")]);
+        // Só o que a seleção alcança, e texto conta mas não soma.
+        assert_eq!(e.stats(0, range(0, 0, 2, 3)).unwrap(), Stats { count: 4, numbers: 3, sum: 50.5 });
+        assert_eq!(e.stats(0, range(0, 0, 1, 1)).unwrap(), Stats { count: 1, numbers: 1, sum: 10.0 });
+        assert_eq!(e.stats(0, range(2, 0, 1, 3)).unwrap(), Stats::default());
+        // Uma coluna inteira custa o mesmo.
+        assert_eq!(e.stats(0, range(0, 0, 1, MAX_ROWS as u32)).unwrap().count, 3);
+    }
+
+    #[test]
+    fn ctrl_arrow_jumps_and_last_cell() {
+        let e = engine(&[(0, 0, "a"), (0, 1, "b"), (0, 2, "c"), (0, 5, "d"), (3, 5, "e")]);
+        let at = |col, row, direction| {
+            let cell = e.jump(0, col, row, direction).unwrap();
+            (cell.col, cell.row)
+        };
+        // Dentro de um bloco, vai ao fim dele; no fim, ao próximo; sem próximo, à borda.
+        assert_eq!(at(0, 0, Direction::Down), (0, 2));
+        assert_eq!(at(0, 2, Direction::Down), (0, 5));
+        assert_eq!(at(0, 5, Direction::Down), (0, MAX_ROWS as u32 - 1));
+        assert_eq!(at(0, 5, Direction::Up), (0, 2));
+        assert_eq!(at(0, 0, Direction::Up), (0, 0));
+        assert_eq!(at(0, 5, Direction::Right), (3, 5));
+        assert_eq!(at(3, 5, Direction::Left), (0, 5));
+        assert_eq!(at(0, 5, Direction::Left), (0, 5));
+        assert_eq!(e.last_cell(0).unwrap(), CellPos { col: 3, row: 5 });
+        assert_eq!(Engine::new().unwrap().last_cell(0).unwrap(), CellPos { col: 0, row: 0 });
+    }
+
+    #[test]
+    fn csv_parsing_and_writing() {
+        let text = "nome;valor\r\n\"Silva; Ana\";\"1.234,50\"\n\"linha\nquebrada\";\"disse \"\"oi\"\"\"\n";
+        assert_eq!(detect_delimiter(text), ';');
+        let records = parse_csv(text, ';');
+        assert_eq!(
+            records,
+            [vec!["nome", "valor"], vec!["Silva; Ana", "1.234,50"], vec!["linha\nquebrada", "disse \"oi\""],]
+        );
+        // Sem quebra de linha no fim, e com campos vazios.
+        assert_eq!(parse_csv("a,,c", ','), [vec!["a", "", "c"]]);
+        assert_eq!(parse_csv("", ','), Vec::<Vec<String>>::new());
+        assert_eq!(parse_csv("a\n\nb\n", ','), [vec!["a"], vec![""], vec!["b"]]);
+        assert_eq!(detect_delimiter("a,b,c\n1;2"), ',');
+        assert_eq!(detect_delimiter("a\tb\n"), '\t');
+        assert_eq!(detect_delimiter("\"a;b;c\",d"), ',');
+        assert_eq!(detect_delimiter("sem separador"), ',');
+        // Escrever e ler de volta dá o mesmo.
+        let written = write_csv(records.iter().map(Vec::as_slice), ';');
+        assert_eq!(parse_csv(&written, ';'), records);
+    }
+
+    #[test]
+    fn decodes_utf8_and_windows_1252() {
+        assert_eq!(decode_text(b"\xEF\xBB\xBFcaf\xC3\xA9"), "café");
+        assert_eq!(decode_text(b"caf\xE9 \x80 \x93"), "café € “");
+    }
+
+    #[test]
+    fn csv_round_trip_through_files() {
+        let dir = std::env::temp_dir().join(format!("abacus-csv-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let input = dir.join("entrada.csv");
+        fs::write(&input, "Produto;Preço;Qtd\r\nCafé;12,50;3\r\n\"Pão; doce\";8;10\r\n").unwrap();
+
+        let mut e = Engine::from_csv(&input).unwrap();
+        assert_eq!(shown(&e, 0, 0), "Produto");
+        assert_eq!(shown(&e, 0, 1), "Café");
+        assert_eq!(shown(&e, 0, 2), "Pão; doce");
+        // Os números entram como números: dá para calcular com eles.
+        e.set_cell(0, 3, 1, "=B2*C2").unwrap();
+        assert_eq!(shown(&e, 3, 1), "37,5");
+
+        let output = dir.join("saida.csv");
+        e.save_csv(0, &output).unwrap();
+        let bytes = fs::read(&output).unwrap();
+        assert!(bytes.starts_with(&[0xEF, 0xBB, 0xBF]));
+        let text = decode_text(&bytes);
+        // Números saem como a grade os mostra: 12,50 virou o número 12,5.
+        assert_eq!(text, "Produto;Preço;Qtd;\r\nCafé;12,5;3;37,5\r\n\"Pão; doce\";8;10;\r\n");
+        fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
