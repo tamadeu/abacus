@@ -1075,3 +1075,22 @@ footer {
   background: #e7e5fb;
   color: #3730a3;
 }
+
+#zoom-box {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+#zoom {
+  width: 110px;
+}
+
+#zoom-label {
+  min-width: 34px;
+  text-align: right;
+  cursor: default;
+}

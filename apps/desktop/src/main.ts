@@ -136,6 +136,10 @@ let rowHeights: number[] = [];
 /** Quantas colunas e linhas da planilha estão congeladas na tela. */
 let frozen = { cols: 0, rows: 0 };
 /** Posição em pixels de cada borda: `colX[i]` é onde começa a i-ésima coluna da tela. */
+/** Ampliação da planilha (1 = 100%). Tudo é desenhado em pixels lógicos e escalado. */
+let zoom = 1;
+const viewW = () => wrap.clientWidth / zoom;
+const viewH = () => wrap.clientHeight / zoom;
 let colX: number[] = [HEADER_WIDTH];
 let rowY: number[] = [HEADER_HEIGHT];
 /** Há texto na barra de fórmulas que ainda não foi gravado na célula. */
@@ -490,9 +494,9 @@ async function openListMenu() {
   const bounds = canvas.getBoundingClientRect();
   const box = rectOf(blockOf(anchor));
   dvMenu.hidden = false;
-  dvMenu.style.minWidth = `${Math.max(140, box.width)}px`;
-  dvMenu.style.left = `${Math.max(0, Math.min(bounds.left + box.left, window.innerWidth - dvMenu.offsetWidth - 8))}px`;
-  dvMenu.style.top = `${Math.min(bounds.top + box.top + box.height + 2, window.innerHeight - dvMenu.offsetHeight - 8)}px`;
+  dvMenu.style.minWidth = `${Math.max(140, box.width * zoom)}px`;
+  dvMenu.style.left = `${Math.max(0, Math.min(bounds.left + box.left * zoom, window.innerWidth - dvMenu.offsetWidth - 8))}px`;
+  dvMenu.style.top = `${Math.min(bounds.top + (box.top + box.height) * zoom + 2, window.innerHeight - dvMenu.offsetHeight - 8)}px`;
 }
 
 /** Grava na célula ativa o item escolhido na lista suspensa. */
@@ -503,15 +507,30 @@ async function pickListItem(item: string) {
   canvas.focus();
 }
 
+const ZOOM_MIN = 0.5;
+const ZOOM_MAX = 3;
+const zoomInput = $("#zoom") as HTMLInputElement;
+const zoomLabel = $("#zoom-label");
+
+/** Muda a ampliação (50% a 300%) e redesenha. */
+function setZoom(value: number) {
+  zoom = Math.round(Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, value)) * 100) / 100;
+  zoomInput.value = String(Math.round(zoom * 100));
+  zoomLabel.textContent = `${Math.round(zoom * 100)}%`;
+  void refresh();
+}
+zoomInput.addEventListener("input", () => setZoom(Number(zoomInput.value) / 100));
+zoomLabel.addEventListener("dblclick", () => setZoom(1));
+
 function draw() {
-  const width = wrap.clientWidth;
-  const height = wrap.clientHeight;
+  const width = viewW();
+  const height = viewH();
   const dpr = window.devicePixelRatio || 1;
-  canvas.width = Math.round(width * dpr);
-  canvas.height = Math.round(height * dpr);
-  canvas.style.width = `${width}px`;
-  canvas.style.height = `${height}px`;
-  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  canvas.width = Math.round(wrap.clientWidth * dpr);
+  canvas.height = Math.round(wrap.clientHeight * dpr);
+  canvas.style.width = `${wrap.clientWidth}px`;
+  canvas.style.height = `${wrap.clientHeight}px`;
+  ctx.setTransform(dpr * zoom, 0, 0, dpr * zoom, 0, 0);
 
   const { origin, anchor } = pos;
   const range = selectedRange();
@@ -815,10 +834,11 @@ function positionEditor() {
   const rect = rectOf(blockOf(pos.anchor));
   ctx.font = `14px ${FONT}`;
   const wanted = Math.max(rect.width, ctx.measureText(editor.value).width + 2 * PADDING + 8);
-  editor.style.left = `${rect.left}px`;
-  editor.style.top = `${rect.top}px`;
-  editor.style.width = `${Math.min(wanted, wrap.clientWidth - rect.left) + 1}px`;
-  editor.style.height = `${rect.height + 1}px`;
+  editor.style.fontSize = `${14 * zoom}px`;
+  editor.style.left = `${rect.left * zoom}px`;
+  editor.style.top = `${rect.top * zoom}px`;
+  editor.style.width = `${(Math.min(wanted, viewW() - rect.left) + 1) * zoom}px`;
+  editor.style.height = `${(rect.height + 1) * zoom}px`;
 }
 
 /**
@@ -1062,8 +1082,8 @@ function markModified() {
 /** Busca no motor o que cabe na tela e redesenha. */
 async function refresh() {
   try {
-    const width = Math.max(1, wrap.clientWidth - HEADER_WIDTH);
-    const height = Math.max(1, wrap.clientHeight - HEADER_HEIGHT);
+    const width = Math.max(1, viewW() - HEADER_WIDTH);
+    const height = Math.max(1, viewH() - HEADER_HEIGHT);
     const view = await engine.view(sheet, pos.origin.col, pos.origin.row, width, height);
     colWidths = view.colWidths;
     rowHeights = view.rowHeights;
@@ -1106,8 +1126,8 @@ async function reveal() {
   for (let guard = 0; guard < 1000; guard++) {
     const colIndex = colBand(focus.col);
     const rowIndex = rowBand(focus.row);
-    const colCut = focus.col > origin.col && (colIndex >= colWidths.length || colX[colIndex + 1] > wrap.clientWidth);
-    const rowCut = focus.row > origin.row && (rowIndex >= rowHeights.length || rowY[rowIndex + 1] > wrap.clientHeight);
+    const colCut = focus.col > origin.col && (colIndex >= colWidths.length || colX[colIndex + 1] > viewW());
+    const rowCut = focus.row > origin.row && (rowIndex >= rowHeights.length || rowY[rowIndex + 1] > viewH());
     if (!colCut && !rowCut) break;
     // Um destino longe (o de uma busca, por exemplo) vai direto para perto do
     // começo da tela, com um pouco do que vem antes; de perto, um passo por vez.
@@ -1524,7 +1544,7 @@ async function freezeAtSelection() {
     await refresh();
     // Sem espaço para a parte que rola, a planilha ficaria presa.
     const room = (bounds: number[], count: number, size: number) => size - bounds[Math.min(count, bounds.length - 1)];
-    if (room(colX, cols, wrap.clientWidth) < 60 || room(rowY, rows, wrap.clientHeight) < 30) {
+    if (room(colX, cols, viewW()) < 60 || room(rowY, rows, viewH()) < 30) {
       await engine.undo();
       statusEl.textContent = "Não cabe congelar tanto nesta janela";
     } else {
@@ -1869,7 +1889,7 @@ async function saveFile(askWhere: boolean) {
 /** Posição de um evento do mouse dentro do canvas. */
 function pointerAt(event: MouseEvent) {
   const bounds = canvas.getBoundingClientRect();
-  return { px: event.clientX - bounds.left, py: event.clientY - bounds.top };
+  return { px: (event.clientX - bounds.left) / zoom, py: (event.clientY - bounds.top) / zoom };
 }
 
 /** Grava no motor o tamanho de uma coluna ou linha da tela. */
@@ -1937,8 +1957,8 @@ function dragTo(px: number, py: number) {
 /** Para onde rolar quando o mouse, num arrasto, passa da borda da grade. */
 function edgeDirection() {
   const { px, py } = lastPointer;
-  const dx = px > wrap.clientWidth - 4 ? 1 : px < HEADER_WIDTH ? -1 : 0;
-  const dy = py > wrap.clientHeight - 4 ? 1 : py < HEADER_HEIGHT ? -1 : 0;
+  const dx = px > viewW() - 4 ? 1 : px < HEADER_WIDTH ? -1 : 0;
+  const dy = py > viewH() - 4 ? 1 : py < HEADER_HEIGHT ? -1 : 0;
   // Arrastando cabeçalhos, o mouse fica sobre eles: só o outro eixo rola.
   if (headerDrag?.kind === "col") return { dx, dy: 0 };
   if (headerDrag?.kind === "row") return { dx: 0, dy };
@@ -2113,9 +2133,9 @@ function openChartPanel(chart: ChartInfo) {
   const box = chartBox(chart);
   const width = chartPanel.offsetWidth;
   const height = chartPanel.offsetHeight;
-  let left = area.left + (box ? box.left + box.width + 10 : 60);
-  if (left + width > window.innerWidth - 8) left = area.left + (box ? box.left : 60) - width - 10;
-  const top = area.top + (box ? box.top : 60);
+  let left = area.left + (box ? (box.left + box.width) * zoom + 10 : 60);
+  if (left + width > window.innerWidth - 8) left = area.left + (box ? box.left * zoom : 60) - width - 10;
+  const top = area.top + (box ? box.top * zoom : 60);
   chartPanel.style.left = `${Math.max(8, Math.min(left, window.innerWidth - width - 8))}px`;
   chartPanel.style.top = `${Math.max(8, Math.min(top, window.innerHeight - height - 8))}px`;
 }
@@ -2352,6 +2372,10 @@ canvas.addEventListener(
   "wheel",
   (event) => {
     event.preventDefault();
+    if (event.ctrlKey || event.metaKey) {
+      setZoom(zoom * (event.deltaY < 0 ? 1.1 : 1 / 1.1));
+      return;
+    }
     const horizontal = event.shiftKey || Math.abs(event.deltaX) > Math.abs(event.deltaY);
     const delta = horizontal ? event.deltaX || event.deltaY : event.deltaY;
     if (delta === 0) return;
@@ -2386,6 +2410,11 @@ canvas.addEventListener("keydown", (event) => {
   const arrow = moves[event.key];
   const shortcut = event.ctrlKey || event.metaKey;
   const letter = event.key.toLowerCase();
+  if (shortcut && !event.altKey && ["+", "=", "-", "_", "0"].includes(event.key)) {
+    event.preventDefault();
+    setZoom(event.key === "0" ? 1 : zoom * (event.key === "-" || event.key === "_" ? 1 / 1.1 : 1.1));
+    return;
+  }
   const toggles: Record<string, "bold" | "italic" | "underline"> = { b: "bold", i: "italic", u: "underline" };
 
   // Com um gráfico selecionado, Delete o apaga, Enter abre as opções e Esc solta a seleção.

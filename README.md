@@ -110,7 +110,7 @@ Limitações conhecidas:
 - Os nomes em português de algumas funções muito recentes do Excel
   (`MAPA`, `REGEX.TESTAR`, `PORCENTAGEMDE`, `APARARINTERVALO`) vieram da
   documentação da Microsoft e não foram conferidos num Excel em português.
-- Não há zoom.
+- Zoom de 50% a 300% (Ctrl + roda, Ctrl +/−/0 ou o controle no rodapé); não é guardado no arquivo.
 - CSV não guarda formatação nem várias planilhas.
 - As referências coloridas aparecem na grade, mas não no texto da fórmula.
 - A lista de funções sugere só os nomes, sem descrição nem argumentos.
