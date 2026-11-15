@@ -115,7 +115,7 @@ Limitações conhecidas:
 - CSV não guarda formatação nem várias planilhas.
 - As referências coloridas aparecem na grade, mas não no texto da fórmula.
 - A ajuda das funções (descrição na lista e assinatura com o argumento atual em
-  destaque) existe só para as cerca de cem mais usadas; as outras mostram só o nome.
+  destaque) existe para cerca de 250 das 500 funções (as mais usadas, estatísticas, de data, texto, financeiras e de matriz); as outras, como as de engenharia, banco de dados e títulos, mostram só o nome.
 - Copiar leva também uma tabela HTML (negrito, cores, alinhamento, bordas), então Word, e-mail e navegadores colam com a formatação; acima de 40 mil células vai só o texto. Colar de outros programas ainda entra só como texto.
 - O tipo de fonte do arquivo ainda não aparece na grade.
 - Formatação condicional: regras por fórmula, por período e conjuntos de ícones
