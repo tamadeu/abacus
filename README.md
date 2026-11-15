@@ -56,7 +56,8 @@ Projeto no início. O que já funciona:
 - Atalhos de navegação: Ctrl+setas, Ctrl+Home, Ctrl+End, Home, PageUp e
   PageDown (com Shift estendem a seleção).
 - Várias planilhas por arquivo: criar, renomear (dois cliques na aba) e
-  excluir, com fórmulas entre planilhas.
+  excluir, com fórmulas entre planilhas. Ao escrever uma fórmula, clicar em
+  outra aba e numa célula insere a referência (`Planilha2!C3`).
 - Grade desenhada em canvas, com rolagem e seleção de uma célula ou de um
   intervalo, por mouse ou teclado (Shift+setas). Clicar num cabeçalho
   seleciona a coluna ou a linha inteira, e arrastar além da borda rola a
@@ -115,7 +116,6 @@ Limitações conhecidas:
 - As referências coloridas aparecem na grade, mas não no texto da fórmula.
 - A ajuda das funções (descrição na lista e assinatura com o argumento atual em
   destaque) existe só para as cerca de cem mais usadas; as outras mostram só o nome.
-- Clicar para inserir referência só funciona dentro da mesma planilha.
 - Colar para outros programas leva só os valores, sem formatação.
 - O tipo de fonte do arquivo ainda não aparece na grade.
 - Formatação condicional: regras por fórmula, por período e conjuntos de ícones

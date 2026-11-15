@@ -168,6 +168,8 @@ let editMode: "enter" | "edit" | null = null;
  * Referência inserida na fórmula clicando numa célula: o trecho do texto que
  * ela ocupa e a célula onde o clique começou. Arrastar troca esse trecho.
  */
+/** A planilha onde a edição começou; na tela pode estar outra, enquanto se aponta para ela. */
+let editSheet: number | null = null;
 let pointing: { input: HTMLInputElement; start: number; end: number; from: Cell } | null = null;
 /** Cabeçalhos sendo arrastados para selecionar colunas ou linhas inteiras. */
 let headerDrag: { kind: "col" | "row"; from: Cell } | null = null;
@@ -826,7 +828,7 @@ function draw() {
 /** Põe o editor sobre a célula ativa, largo o bastante para o texto. */
 function positionEditor() {
   if (editMode === null) return;
-  if (!colOnScreen(pos.anchor.col) || !rowOnScreen(pos.anchor.row)) {
+  if (editSheet !== sheet || !colOnScreen(pos.anchor.col) || !rowOnScreen(pos.anchor.row)) {
     // A célula saiu da tela com a rolagem: a edição continua, fora de vista.
     editor.style.left = "-9999px";
     return;
@@ -852,6 +854,7 @@ function startEdit(initial: string | null, mode: "enter" | "edit") {
   fx.value = editor.value;
   dirty = initial !== null;
   editMode = mode;
+  editSheet = sheet;
   pointing = null;
   editor.hidden = false;
   positionEditor();
@@ -863,6 +866,7 @@ function startEdit(initial: string | null, mode: "enter" | "edit") {
 /** Fecha o editor da célula, sem gravar nem descartar o texto. */
 function stopEdit() {
   editMode = null;
+  editSheet = null;
   pointing = null;
   editor.hidden = true;
   closeSuggestions();
@@ -997,8 +1001,25 @@ function suggestionKey(event: KeyboardEvent): boolean {
   return true;
 }
 
+/** Volta à planilha em que a edição começou, se a tela foi para outra para apontar uma referência. */
+function returnToEditSheet() {
+  if (editSheet === null || editSheet === sheet) return;
+  positions.set(sheet, pos);
+  sheet = editSheet;
+  pos = positions.get(sheet) ?? newPosition();
+  renderTabs();
+}
+
+/** O nome da planilha como vai numa referência: entre apóstrofos se tiver algo além de letras e números. */
+function sheetRef(index: number): string {
+  const name = sheets.find((info) => info.index === index)?.name ?? "";
+  return /^[\p{L}_][\p{L}\p{N}_]*$/u.test(name) ? name : `'${name.replace(/'/g, "''")}'`;
+}
+
 /** Descarta a edição em andamento. */
 function cancelEdit() {
+  returnToEditSheet();
+  void refresh();
   dirty = false;
   stopEdit();
   syncFormulaBar();
@@ -1036,7 +1057,8 @@ function pointAt(input: HTMLInputElement, from: Cell, to: Cell) {
   const first = { col: Math.min(from.col, to.col), row: Math.min(from.row, to.row) };
   const last = { col: Math.max(from.col, to.col), row: Math.max(from.row, to.row) };
   const single = first.col === last.col && first.row === last.row;
-  const text = single ? cellName(first) : `${cellName(first)}:${cellName(last)}`;
+  const prefix = editSheet !== null && editSheet !== sheet ? `${sheetRef(sheet)}!` : "";
+  const text = prefix + (single ? cellName(first) : `${cellName(first)}:${cellName(last)}`);
   const start = pointing?.input === input ? pointing.start : (input.selectionStart ?? input.value.length);
   const end = pointing?.input === input ? pointing.end : (input.selectionEnd ?? start);
   setDraft(input.value.slice(0, start) + text + input.value.slice(end));
@@ -1253,6 +1275,7 @@ async function pageTo(keyName: string, extend: boolean) {
 
 /** Grava o texto da barra de fórmulas na célula ativa. */
 async function write(): Promise<boolean> {
+  returnToEditSheet();
   const { anchor } = pos;
   const current = cells.get(key(anchor.col, anchor.row))?.input ?? "";
   if (!dirty || fx.value === current) {
@@ -1734,7 +1757,28 @@ function clickTab(tab: HTMLElement, info: SheetInfo) {
   const double = lastTabClick.index === info.index && now - lastTabClick.time < 500;
   lastTabClick = { index: double ? -1 : info.index, time: now };
   if (double) renameTab(tab, info);
-  else if (info.index !== sheet) void showSheet(info.index);
+  else if (info.index !== sheet) {
+    const input = activeInput();
+    // Numa fórmula, ir para outra planilha é para apontar uma célula dela: a edição continua.
+    if (input && canPoint(input)) void pointSheet(info.index, input);
+    else void showSheet(info.index);
+  }
+}
+
+/** Mostra outra planilha sem encerrar a edição da fórmula. */
+async function pointSheet(index: number, input: HTMLInputElement) {
+  dirty = true;
+  positions.set(sheet, pos);
+  selectedChart = null;
+  closeChartPanel();
+  sheet = index;
+  pos = positions.get(index) ?? newPosition();
+  renderTabs();
+  await refresh();
+  input.focus();
+  const caret = input.selectionStart ?? input.value.length;
+  input.setSelectionRange(caret, caret);
+  statusEl.textContent = "Clique numa célula para inserir a referência";
 }
 
 /** Redesenha as abas de planilha. */
