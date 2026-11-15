@@ -143,7 +143,57 @@ pub struct Chart {
     pub opts: ChartOptions,
 }
 
+/// Para onde vai o início (ou o fim) de uma faixa quando linhas ou colunas
+/// entram ou saem. `None` se, ao excluir, o ponto some e `end` pede a anterior.
+fn shift_point(x: u32, index: u32, count: u32, insert: bool, end: bool) -> u32 {
+    if insert {
+        return if x >= index { x + count } else { x };
+    }
+    if x >= index + count {
+        x - count
+    } else if x >= index {
+        // Dentro do trecho excluído: o início vai para o primeiro que fica, o fim para o último.
+        if end { index.saturating_sub(1) } else { index }
+    } else {
+        x
+    }
+}
+
 impl Chart {
+    /// Acompanha linhas ou colunas inseridas ou excluídas na planilha do gráfico.
+    /// Devolve `false` se os dados do gráfico foram todos excluídos.
+    pub fn follow(&mut self, rows: bool, index: u32, count: u32, insert: bool) -> bool {
+        let shift = |first: u32, last: u32| {
+            let a = shift_point(first, index, count, insert, false);
+            let b = shift_point(last, index, count, insert, true);
+            // Uma faixa inteira excluída some.
+            let gone = !insert && first >= index && last < index + count;
+            (a, b.max(a), gone)
+        };
+        let (first, last, gone) = if rows {
+            shift(self.range.row, self.range.row + self.range.rows - 1)
+        } else {
+            shift(self.range.col, self.range.col + self.range.cols - 1)
+        };
+        if gone {
+            return false;
+        }
+        if rows {
+            self.range.row = first;
+            self.range.rows = last - first + 1;
+            let (a, b, _) = shift(self.from_row, self.to_row);
+            self.from_row = a;
+            self.to_row = b;
+        } else {
+            self.range.col = first;
+            self.range.cols = last - first + 1;
+            let (a, b, _) = shift(self.from_col, self.to_col);
+            self.from_col = a;
+            self.to_col = b;
+        }
+        true
+    }
+
     /// O estilo da série `index` (o padrão, se não houver).
     pub fn style(&self, index: usize) -> SeriesStyle {
         self.opts.styles.get(index).cloned().unwrap_or_default()

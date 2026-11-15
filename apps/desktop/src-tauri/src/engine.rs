@@ -1132,12 +1132,21 @@ impl Engine {
         }
         // O que foi copiado guarda posições que acabam de mudar.
         self.copied = None;
-        match change {
+        let result = match change {
             Structure::InsertRows => self.model.insert_rows(sheet, index, count),
             Structure::DeleteRows => self.model.delete_rows(sheet, index, count),
             Structure::InsertCols => self.model.insert_columns(sheet, index, count),
             Structure::DeleteCols => self.model.delete_columns(sheet, index, count),
+        };
+        if result.is_ok() {
+            // Os gráficos acompanham (index e count já em base 1 e em i32).
+            let rows = matches!(change, Structure::InsertRows | Structure::DeleteRows);
+            let insert = matches!(change, Structure::InsertRows | Structure::InsertCols);
+            let (index, count) = (index as u32 - 1, count as u32);
+            self.charts.retain_mut(|chart| chart.sheet != sheet || chart.follow(rows, index, count, insert));
+            self.note_state();
         }
+        result
     }
 
     /// Altera uma propriedade de estilo em todas as células do retângulo.
@@ -3137,6 +3146,25 @@ mod tests {
         e.undo().unwrap();
         assert_eq!(e.model.undo_depth(), before);
         assert_eq!(e.model.get_column_width(0, 1).unwrap(), width);
+    }
+
+    #[test]
+    fn charts_follow_inserted_and_deleted_rows_and_columns() {
+        let mut e = engine(&[(0, 0, "A"), (0, 1, "1"), (0, 2, "2")]);
+        let range = Range { col: 0, row: 0, cols: 1, rows: 3 };
+        e.add_chart(0, ChartKind::Column, range).unwrap();
+        let start = e.charts(0)[0].chart.clone();
+        e.change_structure(0, Structure::InsertRows, 0, 2).unwrap();
+        let moved = &e.charts(0)[0].chart;
+        assert_eq!((moved.range.row, moved.from_row), (start.range.row + 2, start.from_row + 2));
+        e.change_structure(0, Structure::InsertCols, 0, 1).unwrap();
+        assert_eq!(e.charts(0)[0].chart.range.col, 1);
+        e.undo().unwrap();
+        assert_eq!(e.charts(0)[0].chart.range.col, 0);
+        e.change_structure(0, Structure::DeleteRows, 2, 1).unwrap();
+        assert_eq!(e.charts(0)[0].chart.range.rows, 2);
+        e.change_structure(0, Structure::DeleteCols, 0, 1).unwrap();
+        assert!(e.charts(0).is_empty());
     }
 
     #[test]
