@@ -566,9 +566,11 @@ impl Engine {
     /// Grava o conteúdo de uma célula. Texto vazio apaga a célula.
     pub fn set_cell(&mut self, sheet: u32, col: u32, row: u32, input: &str) -> Result<(), String> {
         self.check_input(sheet, col, row, input)?;
-        let (row, col) = to_ironcalc(col, row)?;
+        let (r, c) = to_ironcalc(col, row)?;
         let input = if input.trim().is_empty() { "" } else { input };
-        self.model.set_user_input(sheet, row, col, input)
+        self.model.set_user_input(sheet, r, c, input)?;
+        self.refresh_pivots_fed_by(sheet, col, row);
+        Ok(())
     }
 
     /// O que cabe numa tela de `width` por `height` pixels: as linhas e
@@ -2806,6 +2808,8 @@ mod tests {
 
         // Muda os dados e atualiza; a definição muda para uma tabela menor e o resto some.
         e.set_cell(0, 2, 1, "100").unwrap();
+        // Mexer nos dados de origem já refaz a tabela.
+        assert_eq!(shown(&e, 6, 4), "100");
         let again = e.refresh_pivot(1).unwrap();
         assert_eq!(again.height, 5);
         assert_eq!(shown(&e, 6, 4), "100");

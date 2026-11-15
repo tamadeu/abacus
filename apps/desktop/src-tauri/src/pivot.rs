@@ -640,6 +640,14 @@ pub fn compute(pivot: &Pivot, source: &Source) -> Result<Grid, String> {
             label_cols: 1,
         });
     }
+    // Sem valores não há o que cruzar: só a lista de itens das linhas.
+    let listing;
+    let pivot = if pivot.values.is_empty() && !pivot.cols.is_empty() {
+        listing = Pivot { cols: Vec::new(), ..pivot.clone() };
+        &listing
+    } else {
+        pivot
+    };
     let index_of = |name: &str| -> Result<usize, String> {
         source
             .headers
@@ -1100,6 +1108,8 @@ mod tests {
         let list = compute(&p, &data()).unwrap();
         assert_eq!(list.cells[1], vec![t("Norte")]);
         assert_eq!(list.cells.last().unwrap(), &vec![t("Total Geral")]);
+        p.cols = vec![field("Produto")];
+        assert_eq!(compute(&p, &data()).unwrap().cells, list.cells);
         let blanks = Source {
             headers: vec!["A".into(), "B".into()],
             rows: vec![vec![text(""), num(1.0)], vec![text("x"), num(2.0)]],

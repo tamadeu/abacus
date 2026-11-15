@@ -35,6 +35,17 @@ Projeto no início. O que já funciona:
   (entre, maior que…) e aviso próprio. Ao digitar, o valor recusado abre um
   aviso e a célula continua em edição; a célula com lista mostra uma seta. As
   regras vão para o `.xlsx` e voltam ao abrir.
+- Tabelas dinâmicas (aba Inserir): numa planilha nova, a partir da seleção ou
+  do bloco de dados em volta da célula ativa. Painel de campos à direita, com
+  áreas de Filtros, Colunas, Linhas e Valores (arraste os campos ou clique
+  neles). Vários campos aninhados em linhas e colunas, com subtotais e totais
+  gerais; vários valores (soma, contagem, média, mínimo, máximo, produto,
+  desvio padrão, variância, valores distintos); "mostrar valor como" (% do
+  total geral, da linha ou da coluna); campos calculados (`[Preço] *
+  [Quantidade]`); agrupamento de datas (ano, trimestre, mês, ano e mês) e de
+  números em faixas; ordem por nome ou por valor, "só os primeiros N"; filtros
+  por item; formato e título de cada valor. A tabela se refaz sozinha quando
+  os dados de origem mudam (ou em "Atualizar tabelas", na aba Dados).
 - Barra de status com média, contagem e soma da seleção.
 - A coluna alarga sozinha quando o número digitado não cabe.
 - Atalhos de navegação: Ctrl+setas, Ctrl+Home, Ctrl+End, Home, PageUp e
@@ -107,6 +118,12 @@ Limitações conhecidas:
 - Validação de dados: só vale ao digitar (colar e preencher não conferem),
   não entra no desfazer e não acompanha linhas e colunas inseridas; regras de
   data, hora e fórmula somem ao salvar. Itens de lista não podem ter vírgula.
+- Tabelas dinâmicas: no `.xlsx` ficam como valores comuns, mais a definição
+  numa parte que só o Abacus lê (o Excel mostra os números, mas não abre a
+  tabela como dinâmica). Desfazer volta por etapas (limpar, escrever, estilo),
+  não acompanham linhas e colunas inseridas e não podem ficar sobre os dados de
+  origem nem sobre outra tabela. Ainda não há segmentação de dados, expandir e
+  recolher grupos, nem detalhar uma célula.
 - Gráficos: só colunas, barras, linhas e pizza (os de outros tipos, como
   dispersão ou área, somem ao salvar); ficam presos a células, então não
   acompanham linhas e colunas inseridas ou excluídas; criar, mover ou apagar
@@ -159,7 +176,7 @@ cargo test
 
 1. Propor o português do Brasil ao IronCalc original.
 2. Versão web com o motor em WebAssembly.
-3. Tabelas dinâmicas.
+3. Gravar tabelas dinâmicas no formato nativo do Excel.
 
 ## Licença
 

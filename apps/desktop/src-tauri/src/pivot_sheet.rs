@@ -182,7 +182,34 @@ impl Engine {
         Ok(pivot)
     }
 
+    /// Alarga as colunas que não comportam o texto, sem nunca estreitar.
+    fn fit_pivot_columns(&mut self, sheet: u32, at: Range, grid: &Grid) -> Result<(), String> {
+        for c in 0..at.cols as usize {
+            let chars = grid
+                .cells
+                .iter()
+                .map(|row| match &row[c] {
+                    Out::Empty => 0,
+                    Out::Text(text) => text.chars().count(),
+                    // Dígitos inteiros, separadores de milhar e duas casas decimais.
+                    Out::Num(n) => {
+                        let digits = (n.abs().trunc() as u64).to_string().len();
+                        digits + digits / 3 + 3 + usize::from(*n < 0.0)
+                    }
+                })
+                .max()
+                .unwrap_or(0);
+            let width = (chars as f64 * 7.5 + 22.0).clamp(90.0, 320.0);
+            let column = at.col + c as u32;
+            if width > 90.0 {
+                self.set_col_width(sheet, column, width)?;
+            }
+        }
+        Ok(())
+    }
+
     fn style_pivot(&mut self, sheet: u32, at: Range, grid: &Grid) -> Result<(), String> {
+        self.fit_pivot_columns(sheet, at, grid)?;
         let cols = at.cols;
         let rows_of =
             |first: usize, count: usize| Range { col: at.col, row: at.row + first as u32, cols, rows: count as u32 };
@@ -247,6 +274,23 @@ impl Engine {
     pub fn refresh_pivot(&mut self, id: u32) -> Result<Pivot, String> {
         let pivot = self.pivots.iter().find(|p| p.id == id).ok_or("a tabela dinâmica não existe mais")?.clone();
         self.update_pivot(pivot)
+    }
+
+    /// Refaz as tabelas cujos dados de origem incluem a célula. Uma falha não
+    /// atrapalha a edição: a tabela fica como estava até a próxima atualização.
+    pub(crate) fn refresh_pivots_fed_by(&mut self, sheet: u32, col: u32, row: u32) {
+        let cell = Range { col, row, cols: 1, rows: 1 };
+        let ids: Vec<u32> = self
+            .pivots
+            .iter()
+            .filter(|p| {
+                p.source_sheet == sheet && parse_range_text(&p.source).is_some_and(|source| overlaps(source, cell))
+            })
+            .map(|p| p.id)
+            .collect();
+        for id in ids {
+            let _ = self.refresh_pivot(id);
+        }
     }
 
     /// Redesenha todas as tabelas (por exemplo, depois de mudar os dados).

@@ -14,6 +14,7 @@ import {
 } from "./engine";
 import { CHART_HANDLE, drawChart, type Box } from "./chart-draw";
 import { setupConditionalPanel } from "./conditional";
+import { setupPivotPanel } from "./pivot";
 import { setupValidationPanel } from "./validation";
 import FUNCTIONS from "./functions.json";
 import { formulaRefs } from "./refs";
@@ -993,6 +994,7 @@ function syncFormulaBar() {
   else nameBox.textContent = singleSelection() ? cellName(anchor) : `${cellName(range)}:${cellName(last)}`;
   if (!dirty) fx.value = cells.get(key(anchor.col, anchor.row))?.input ?? "";
   scheduleStats();
+  pivotPanel.sync(anchor.col, anchor.row);
 }
 
 const numberFormat = new Intl.NumberFormat("pt-BR", { maximumFractionDigits: 10 });
@@ -1072,6 +1074,7 @@ async function refresh() {
     rowY = edges(rowHeights, HEADER_HEIGHT);
     charts = await engine.charts(sheet);
     validations = await engine.validations(sheet);
+    pivotPanel.setKnown(await engine.pivots(sheet));
     if (!charts.some((chart) => chart.id === selectedChart)) selectedChart = null;
     cells = new Map(view.cells.map((cell) => [key(cell.col, cell.row), cell]));
     merges = view.merges;
@@ -2625,6 +2628,7 @@ const closeMenu = () => {
 document.addEventListener("pointerdown", (event) => {
   if (!menu.hidden && !menu.contains(event.target as Node)) closeMenu();
   if (!dvMenu.hidden && !dvMenu.contains(event.target as Node)) closeListMenu();
+  if (!(event.target as HTMLElement).closest?.("#pivot-menu, .pvt-field")) pivotPanel.closeMenu();
   if (!filterPanel.hidden && !filterPanel.contains(event.target as Node)) closeFilter();
 });
 window.addEventListener("blur", closeMenu);
@@ -2647,6 +2651,8 @@ function runAction(action: string, at: { left: number; top: number }) {
   else if (action.startsWith("chart-")) void insertChart(action.slice(6) as ChartKind);
   else if (action === "cond-open") void openConditional();
   else if (action === "dv-open") void openValidation();
+  else if (action === "pivot-new") void pivotPanel.create();
+  else if (action === "pivot-refresh") void refreshPivots();
   else if (action === "freeze") void freezeAtSelection();
   else if (action === "unfreeze") void change("descongelar", () => engine.setFrozen(sheet, 0, 0));
   else void changeStructure(action);
@@ -2689,6 +2695,43 @@ for (const tab of tabs) {
     selectTab(tabs[(tabs.indexOf(tab) + shift + tabs.length) % tabs.length], true);
   });
 }
+
+/** Refaz todas as tabelas dinâmicas a partir dos dados de origem. */
+async function refreshPivots() {
+  if (!(await write())) return;
+  try {
+    const count = await engine.refreshAllPivots();
+    statusEl.textContent = count === 0 ? "Não há tabelas dinâmicas" : "Tabelas dinâmicas atualizadas";
+    if (count > 0) markModified();
+    await refresh();
+  } catch (error) {
+    statusEl.textContent = `Erro ao atualizar as tabelas dinâmicas: ${error}`;
+  }
+}
+
+// Painel da tabela dinâmica.
+const pivotPanel = setupPivotPanel({
+  engine,
+  sheet: () => sheet,
+  sourceText: async () => {
+    const range = selectedRange();
+    const picked = singleSelection() ? await engine.dataRegion(sheet, pos.anchor.col, pos.anchor.row) : range;
+    return rangeText(picked);
+  },
+  addSheet: async () => {
+    const index = await engine.addSheet();
+    await loadSheets();
+    await showSheet(index);
+    return index;
+  },
+  changed: async () => {
+    markModified();
+    await refresh();
+  },
+  status: (text) => {
+    statusEl.textContent = text;
+  },
+});
 
 // Painel de validação de dados.
 const openValidation = setupValidationPanel({

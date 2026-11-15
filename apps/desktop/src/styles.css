@@ -364,9 +364,16 @@ body {
   outline-offset: -1px;
 }
 
+#workspace {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
 #grid-wrap {
   position: relative;
   flex: 1;
+  min-width: 0;
   min-height: 0;
   overflow: hidden;
   border-top: 1px solid var(--line);
@@ -724,6 +731,245 @@ footer {
 
 #dv-menu li:hover,
 #dv-menu li[aria-selected="true"] {
+  background: #e7e5fb;
+  color: #3730a3;
+}
+
+/* Painel de campos da tabela dinâmica, encaixado à direita da grade. */
+#pivot-panel {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  gap: 8px;
+  width: 300px;
+  padding: 12px;
+  overflow-y: auto;
+  border-top: 1px solid var(--line);
+  border-left: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+  background: #fff;
+  font-size: 12px;
+}
+
+#pivot-panel[hidden] {
+  display: none;
+}
+
+#pivot-panel h4 {
+  margin: 4px 0 0;
+  font-size: 12px;
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.pvt-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 14px;
+}
+
+#pivot-panel label {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  color: var(--muted);
+}
+
+#pivot-panel input[type="text"],
+#pivot-panel select {
+  height: 28px;
+  padding: 0 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  font: inherit;
+  color: var(--ink);
+  background: #fff;
+}
+
+.pvt-fields {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  max-height: 120px;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  list-style: none;
+}
+
+.pvt-field {
+  padding: 3px 8px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: #f5f5fb;
+  cursor: grab;
+}
+
+.pvt-field:hover {
+  border-color: #4f46e5;
+}
+
+#pivot-panel > * {
+  flex: none;
+}
+
+.pvt-areas {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.pvt-area {
+  display: flex;
+  flex-direction: column;
+  min-height: 52px;
+  padding: 6px;
+  border: 1px dashed var(--line);
+  border-radius: 8px;
+}
+
+
+.pvt-area h4 {
+  margin: 0 0 4px;
+}
+
+.pvt-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.pvt-hint {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.pvt-item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.pvt-chip {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 0 2px 0 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+  cursor: grab;
+}
+
+.pvt-chip[data-open="true"] {
+  border-color: #4f46e5;
+  background: #eef2ff;
+}
+
+.pvt-name {
+  flex: 1;
+  min-width: 0;
+  height: 26px;
+  padding: 0;
+  overflow: hidden;
+  border: 0;
+  background: none;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font: inherit;
+  cursor: pointer;
+}
+
+.pvt-x {
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: var(--muted);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.pvt-x:hover {
+  background: #eee;
+}
+
+.pvt-edit {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 6px;
+  border-radius: 8px;
+  background: #f8f8fd;
+}
+
+.pvt-items {
+  display: flex;
+  flex-direction: column;
+  max-height: 140px;
+  overflow-y: auto;
+}
+
+#pivot-panel .pvt-check {
+  flex-direction: row;
+  align-items: center;
+  gap: 6px;
+  color: var(--ink);
+}
+
+.pvt-options {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.pvt-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.pvt-danger {
+  color: #b42318;
+}
+
+.pvt-error {
+  margin: 0;
+  color: #b42318;
+}
+
+#pivot-menu {
+  position: fixed;
+  z-index: 12;
+  min-width: 170px;
+  margin: 0;
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+  box-shadow: 0 8px 24px rgba(27, 27, 41, 0.16);
+  list-style: none;
+}
+
+#pivot-menu[hidden] {
+  display: none;
+}
+
+#pivot-menu li {
+  padding: 5px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+#pivot-menu li:hover {
   background: #e7e5fb;
   color: #3730a3;
 }

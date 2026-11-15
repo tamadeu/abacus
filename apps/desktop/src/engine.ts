@@ -100,6 +100,65 @@ export type ValidationOp =
   | "less"
   | "lessEqual";
 
+export type PivotGroup = "none" | "year" | "quarter" | "month" | "yearMonth" | "bucket";
+export type PivotSort = "labelAsc" | "labelDesc" | "valueAsc" | "valueDesc";
+export type PivotAgg =
+  | "sum"
+  | "count"
+  | "countNums"
+  | "average"
+  | "min"
+  | "max"
+  | "product"
+  | "stdDev"
+  | "var"
+  | "distinct"
+  | "calc";
+export type PivotShowAs = "normal" | "pctTotal" | "pctRow" | "pctCol";
+
+/** Um campo nas linhas ou nas colunas de uma tabela dinâmica. */
+export interface PivotField {
+  name: string;
+  group: PivotGroup;
+  step: number;
+  sort: PivotSort;
+  sortValue: number;
+  top: number | null;
+}
+
+/** Um campo da área de valores. */
+export interface PivotValue {
+  field: string;
+  agg: PivotAgg;
+  showAs: PivotShowAs;
+  title: string;
+  format: string;
+  formula: string;
+}
+
+/** Uma tabela dinâmica. */
+export interface Pivot {
+  /** 0 numa tabela nova. */
+  id: number;
+  sourceSheet: number;
+  /** Células de origem (`A1:E100`), com os nomes dos campos na primeira linha. */
+  source: string;
+  sheet: number;
+  col: number;
+  row: number;
+  rows: PivotField[];
+  cols: PivotField[];
+  values: PivotValue[];
+  filters: { field: string; hidden: string[] }[];
+  grandRows: boolean;
+  grandCols: boolean;
+  subtotals: boolean;
+  repeatLabels: boolean;
+  /** Tamanho da grade escrita; o motor preenche. */
+  width: number;
+  height: number;
+}
+
 /** Uma regra de validação de dados. */
 export interface Validation {
   /** 0 numa regra nova. */
@@ -355,6 +414,14 @@ export interface Engine {
   /** Mostra só as linhas do intervalo com um dos valores na coluna. Devolve quantas ficaram ocultas. */
   applyFilter(sheet: number, range: Range, col: number, allowed: string[]): Promise<number>;
   /** Regras de formatação condicional da planilha, da de maior prioridade para a de menor. */
+  pivots(sheet: number): Promise<Pivot[]>;
+  pivotFields(sheet: number, source: string): Promise<string[]>;
+  pivotItems(sheet: number, source: string, field: PivotField): Promise<string[]>;
+  addPivot(pivot: Pivot): Promise<Pivot>;
+  updatePivot(pivot: Pivot): Promise<Pivot>;
+  refreshPivot(id: number): Promise<Pivot>;
+  deletePivot(id: number, clear: boolean): Promise<void>;
+  refreshAllPivots(): Promise<number>;
   validations(sheet: number): Promise<Validation[]>;
   addValidation(sheet: number, rule: Validation): Promise<Validation>;
   updateValidation(sheet: number, rule: Validation): Promise<Validation>;
@@ -543,6 +610,38 @@ class TauriEngine implements Engine {
 
   applyFilter(sheet: number, range: Range, col: number, allowed: string[]): Promise<number> {
     return invoke("apply_filter", { sheet, range, col, allowed });
+  }
+
+  pivots(sheet: number): Promise<Pivot[]> {
+    return invoke("list_pivots", { sheet });
+  }
+
+  pivotFields(sheet: number, source: string): Promise<string[]> {
+    return invoke("pivot_fields", { sheet, source });
+  }
+
+  pivotItems(sheet: number, source: string, field: PivotField): Promise<string[]> {
+    return invoke("pivot_items", { sheet, source, field });
+  }
+
+  addPivot(pivot: Pivot): Promise<Pivot> {
+    return invoke("add_pivot", { pivot });
+  }
+
+  updatePivot(pivot: Pivot): Promise<Pivot> {
+    return invoke("update_pivot", { pivot });
+  }
+
+  refreshPivot(id: number): Promise<Pivot> {
+    return invoke("refresh_pivot", { id });
+  }
+
+  deletePivot(id: number, clear: boolean): Promise<void> {
+    return invoke("delete_pivot", { id, clear });
+  }
+
+  refreshAllPivots(): Promise<number> {
+    return invoke("refresh_all_pivots");
   }
 
   validations(sheet: number): Promise<Validation[]> {
@@ -829,6 +928,36 @@ class PreviewEngine implements Engine {
   }
 
   async applyFilter(): Promise<number> {
+    return 0;
+  }
+
+  async pivots(): Promise<Pivot[]> {
+    return [];
+  }
+
+  async pivotFields(): Promise<string[]> {
+    return [];
+  }
+
+  async pivotItems(): Promise<string[]> {
+    return [];
+  }
+
+  async addPivot(): Promise<Pivot> {
+    throw new Error("a pré-visualização não tem tabelas dinâmicas");
+  }
+
+  async updatePivot(): Promise<Pivot> {
+    throw new Error("a pré-visualização não tem tabelas dinâmicas");
+  }
+
+  async refreshPivot(): Promise<Pivot> {
+    throw new Error("a pré-visualização não tem tabelas dinâmicas");
+  }
+
+  async deletePivot(): Promise<void> {}
+
+  async refreshAllPivots(): Promise<number> {
     return 0;
   }
 

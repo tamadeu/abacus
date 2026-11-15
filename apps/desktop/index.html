@@ -94,6 +94,8 @@
       <button type="button" data-action="insert-col-right">Coluna à direita</button>
       <button type="button" data-action="delete-cols">Excluir colunas</button>
       <span class="separator" aria-hidden="true"></span>
+      <button type="button" data-action="pivot-new" title="Resumir os dados da seleção (ou da tabela em volta da célula ativa) numa tabela dinâmica">Tabela dinâmica</button>
+      <span class="separator" aria-hidden="true"></span>
       <span class="toolbar-label">Gráfico</span>
       <button type="button" data-action="chart-column" title="Gráfico de colunas com a seleção (ou a tabela em volta da célula ativa)">Colunas</button>
       <button type="button" data-action="chart-bar" title="Gráfico de barras">Barras</button>
@@ -108,6 +110,8 @@
       <button type="button" data-action="filter" title="Escolher os valores a mostrar na coluna da célula ativa">Filtrar</button>
       <button type="button" data-action="clear-filter" title="Reexibir as linhas da tabela">Limpar filtro</button>
       <span class="separator" aria-hidden="true"></span>
+      <button type="button" data-action="pivot-new" title="Resumir os dados da seleção numa tabela dinâmica">Tabela dinâmica</button>
+      <button type="button" data-action="pivot-refresh" title="Atualizar todas as tabelas dinâmicas com os dados de origem">Atualizar tabelas</button>
       <button type="button" data-action="dv-open" title="Limitar o que pode ser digitado: lista suspensa, números, tamanho do texto">Validação de dados</button>
       <button type="button" data-action="cond-open" title="Pintar células segundo regras: maior que, duplicados, escala de cor, barras de dados…">Formatação condicional</button>
       <span class="separator" aria-hidden="true"></span>
@@ -133,6 +137,7 @@
       <input id="fx" autocomplete="off" spellcheck="false" />
     </div>
 
+    <div id="workspace">
     <main id="grid-wrap">
       <canvas id="grid" tabindex="0" aria-label="Planilha"></canvas>
       <input id="cell-editor" hidden autocomplete="off" spellcheck="false" aria-label="Conteúdo da célula" />
@@ -151,6 +156,9 @@
         </div>
       </div>
     </main>
+    <aside id="pivot-panel" aria-label="Campos da tabela dinâmica" hidden></aside>
+    </div>
+    <ul id="pivot-menu" role="menu" hidden></ul>
 
     <div id="menu" role="menu" aria-label="Ações da seleção" hidden>
       <button type="button" role="menuitem" data-action="cut">Recortar</button>
