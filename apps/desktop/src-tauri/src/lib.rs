@@ -287,20 +287,6 @@ fn startup_file(state: State<'_, AppState>) -> Option<String> {
     state.startup.lock().ok().and_then(|mut path| path.take())
 }
 
-/// Abre um documento de texto (`.docx`).
-#[tauri::command]
-fn doc_open(path: String) -> Result<abacus_doc::Document, String> {
-    let bytes = std::fs::read(&path).map_err(|e| format!("não foi possível abrir {path}: {e}"))?;
-    abacus_doc::read_docx(&bytes)
-}
-
-/// Grava um documento de texto como `.docx`.
-#[tauri::command]
-fn doc_save(path: String, doc: abacus_doc::Document) -> Result<(), String> {
-    let bytes = abacus_doc::write_docx(&doc)?;
-    std::fs::write(&path, bytes).map_err(|e| format!("não foi possível gravar {path}: {e}"))
-}
-
 /// Grava um gráfico exportado, como imagem PNG ou como PDF.
 #[tauri::command]
 fn write_image(path: String, bytes: Vec<u8>) -> Result<(), String> {
@@ -544,8 +530,6 @@ pub fn run() {
             data_region,
             list_charts,
             write_image,
-            doc_open,
-            doc_save,
             add_chart,
             add_pivot_chart,
             update_chart,

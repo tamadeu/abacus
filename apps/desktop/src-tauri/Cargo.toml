@@ -19,7 +19,6 @@ tauri-build = { version = "2", features = [] }
 # Fork do IronCalc: português do Brasil (localidade e idioma) e agrupamento
 # de alterações num único passo de desfazer.
 ironcalc = { git = "https://github.com/tamadeu/IronCalc", branch = "abacus" }
-abacus-doc = { path = "../../../crates/abacus-doc" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 quick-xml = "0.42"
