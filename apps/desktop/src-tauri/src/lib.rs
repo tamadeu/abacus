@@ -3,6 +3,7 @@
 
 mod chart_trend;
 mod charts;
+mod clipboard_html;
 mod conditional;
 mod engine;
 mod package;
@@ -202,8 +203,16 @@ fn fill_cells(state: State<'_, AppState>, sheet: u32, range: Range, axis: FillAx
 /// Copia (ou recorta) o intervalo para a área de transferência do sistema.
 #[tauri::command]
 fn copy_cells(app: AppHandle, state: State<'_, AppState>, sheet: u32, range: Range, cut: bool) -> Result<(), String> {
-    let text = state.with(|engine| engine.copy(sheet, range, cut))?;
-    app.clipboard().write_text(text).map_err(|e| format!("não foi possível gravar na área de transferência: {e}"))
+    let (text, html) = state.with(|engine| Ok((engine.copy(sheet, range, cut)?, engine.copy_html(sheet, range)?)))?;
+    let failed =
+        |e: tauri_plugin_clipboard_manager::Error| format!("não foi possível gravar na área de transferência: {e}");
+    // Com HTML, outros programas colam com a formatação; o texto continua sendo
+    // o que o Abacus usa para reconhecer a própria cópia.
+    match html {
+        Some(html) => app.clipboard().write_html(html, Some(text)),
+        None => app.clipboard().write_text(text),
+    }
+    .map_err(failed)
 }
 
 /// Cola a área de transferência do sistema a partir da célula dada e devolve

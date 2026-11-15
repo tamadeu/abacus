@@ -1064,6 +1064,12 @@ impl Engine {
 
     /// O que desenhar numa célula (linha e coluna a partir de um), ou `None`
     /// se ela não tem conteúdo nem estilo.
+    /// A célula como a grade a vê (posição a partir de zero).
+    pub(crate) fn view_of_cell(&self, sheet: u32, col: u32, row: u32) -> Result<Option<CellView>, String> {
+        let (row, col) = to_ironcalc(col, row)?;
+        self.cell_view(sheet, row, col)
+    }
+
     fn cell_view(&self, sheet: u32, row: i32, col: i32) -> Result<Option<CellView>, String> {
         let input = self.model.get_cell_content(sheet, row, col)?;
         let display = self.model.get_formatted_cell_value(sheet, row, col)?;
