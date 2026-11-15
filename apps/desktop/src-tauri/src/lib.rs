@@ -4,6 +4,8 @@
 mod charts;
 mod conditional;
 mod engine;
+mod package;
+mod validation;
 
 use std::path::PathBuf;
 use std::sync::Mutex;
@@ -16,6 +18,7 @@ use engine::{
 };
 use tauri::{AppHandle, State};
 use tauri_plugin_clipboard_manager::ClipboardExt;
+use validation::Validation;
 
 /// Pasta de trabalho aberta na janela.
 struct AppState {
@@ -302,6 +305,36 @@ fn delete_cond_rule(state: State<'_, AppState>, sheet: u32, index: u32) -> Resul
     state.with(|engine| engine.delete_cond_rule(sheet, index))
 }
 
+/// Regras de validação de dados de uma planilha.
+#[tauri::command]
+fn list_validations(state: State<'_, AppState>, sheet: u32) -> Result<Vec<Validation>, String> {
+    state.with(|engine| Ok(engine.validations(sheet)))
+}
+
+/// Cria uma regra de validação de dados.
+#[tauri::command]
+fn add_validation(state: State<'_, AppState>, sheet: u32, rule: Validation) -> Result<Validation, String> {
+    state.with(|engine| engine.add_validation(sheet, rule))
+}
+
+/// Troca uma regra de validação de dados.
+#[tauri::command]
+fn update_validation(state: State<'_, AppState>, sheet: u32, rule: Validation) -> Result<Validation, String> {
+    state.with(|engine| engine.update_validation(sheet, rule))
+}
+
+/// Apaga uma regra de validação de dados.
+#[tauri::command]
+fn delete_validation(state: State<'_, AppState>, id: u32) -> Result<(), String> {
+    state.with(|engine| engine.delete_validation(id))
+}
+
+/// Itens da lista suspensa de uma célula, se ela tiver uma.
+#[tauri::command]
+fn list_options(state: State<'_, AppState>, sheet: u32, col: u32, row: u32) -> Result<Option<Vec<String>>, String> {
+    state.with(|engine| engine.list_options(sheet, col, row))
+}
+
 /// O bloco de dados contínuo em volta de uma célula.
 #[tauri::command]
 fn data_region(state: State<'_, AppState>, sheet: u32, col: u32, row: u32) -> Result<Range, String> {
@@ -384,6 +417,11 @@ pub fn run() {
             add_cond_rule,
             update_cond_rule,
             delete_cond_rule,
+            list_validations,
+            add_validation,
+            update_validation,
+            delete_validation,
+            list_options,
             data_region,
             list_charts,
             add_chart,

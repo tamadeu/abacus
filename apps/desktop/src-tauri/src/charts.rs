@@ -131,7 +131,7 @@ pub fn build_data(range: Range, cell: impl Fn(u32, u32) -> CellInfo) -> ChartDat
 // ---------------------------------------------------------------------------
 
 /// Letras da coluna (`0` → `A`).
-fn col_letters(col: u32) -> String {
+pub(crate) fn col_letters(col: u32) -> String {
     let mut n = col + 1;
     let mut letters = Vec::new();
     while n > 0 {
@@ -143,7 +143,7 @@ fn col_letters(col: u32) -> String {
     String::from_utf8(letters).unwrap_or_default()
 }
 
-fn escape(text: &str) -> String {
+pub(crate) fn escape(text: &str) -> String {
     text.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;")
 }
 
@@ -403,24 +403,24 @@ pub fn write_into(xlsx: Vec<u8>, sheet_names: &[String], charts: &[(Chart, Chart
 
 /// Um elemento XML, só com o que a leitura precisa.
 #[derive(Default)]
-struct Node {
-    name: String,
-    attrs: Vec<(String, String)>,
-    children: Vec<Node>,
-    text: String,
+pub(crate) struct Node {
+    pub name: String,
+    pub attrs: Vec<(String, String)>,
+    pub children: Vec<Node>,
+    pub text: String,
 }
 
 impl Node {
-    fn attr(&self, name: &str) -> Option<&str> {
+    pub fn attr(&self, name: &str) -> Option<&str> {
         self.attrs.iter().find(|(key, _)| key == name).map(|(_, value)| value.as_str())
     }
 
-    fn child(&self, name: &str) -> Option<&Node> {
+    pub fn child(&self, name: &str) -> Option<&Node> {
         self.children.iter().find(|child| child.name == name)
     }
 
     /// Todos os descendentes com o nome dado, em ordem.
-    fn all<'a>(&'a self, name: &str, found: &mut Vec<&'a Node>) {
+    pub fn all<'a>(&'a self, name: &str, found: &mut Vec<&'a Node>) {
         for child in &self.children {
             if child.name == name {
                 found.push(child);
@@ -429,14 +429,14 @@ impl Node {
         }
     }
 
-    fn first(&self, name: &str) -> Option<&Node> {
+    pub fn first(&self, name: &str) -> Option<&Node> {
         let mut found = Vec::new();
         self.all(name, &mut found);
         found.into_iter().next()
     }
 }
 
-fn parse_xml(bytes: &[u8]) -> Option<Node> {
+pub(crate) fn parse_xml(bytes: &[u8]) -> Option<Node> {
     let mut reader = Reader::from_reader(bytes);
     let mut stack = vec![Node::default()];
     let make = |element: &quick_xml::events::BytesStart| {
@@ -485,7 +485,7 @@ fn parse_xml(bytes: &[u8]) -> Option<Node> {
 
 /// Resolve `target` em relação à pasta de `base` (`xl/worksheets/sheet1.xml`
 /// + `../drawings/d.xml` → `xl/drawings/d.xml`).
-fn resolve(base: &str, target: &str) -> String {
+pub(crate) fn resolve(base: &str, target: &str) -> String {
     let mut parts: Vec<&str> = if let Some(absolute) = target.strip_prefix('/') {
         return absolute.to_string();
     } else {
@@ -505,7 +505,7 @@ fn resolve(base: &str, target: &str) -> String {
 }
 
 /// Pasta de relações de um arquivo: `xl/a/b.xml` → `xl/a/_rels/b.xml.rels`.
-fn rels_path(part: &str) -> String {
+pub(crate) fn rels_path(part: &str) -> String {
     match part.rsplit_once('/') {
         Some((dir, file)) => format!("{dir}/_rels/{file}.rels"),
         None => format!("_rels/{part}.rels"),
@@ -513,7 +513,7 @@ fn rels_path(part: &str) -> String {
 }
 
 /// Lê `A1` ou `$B$3` como (coluna, linha) a partir de zero.
-fn parse_cell(text: &str) -> Option<(u32, u32)> {
+pub(crate) fn parse_cell(text: &str) -> Option<(u32, u32)> {
     let text = text.replace('$', "");
     let split = text.find(|c: char| c.is_ascii_digit())?;
     let (letters, digits) = text.split_at(split);
@@ -529,7 +529,7 @@ fn parse_cell(text: &str) -> Option<(u32, u32)> {
 }
 
 /// Lê `'Nome'!$A$1:$B$3` como a planilha e o intervalo (colunas e linhas, inclusive).
-fn parse_reference(text: &str) -> Option<(String, (u32, u32, u32, u32))> {
+pub(crate) fn parse_reference(text: &str) -> Option<(String, (u32, u32, u32, u32))> {
     let (sheet, cells) = text.rsplit_once('!')?;
     let sheet = sheet
         .strip_prefix('\'')

@@ -316,6 +316,8 @@ pub struct Engine {
     copied: Option<Copied>,
     /// Gráficos de todas as planilhas; o motor não os conhece.
     charts: Vec<Chart>,
+    /// Regras de validação de dados; o motor não as conhece.
+    pub(crate) validations: Vec<crate::validation::Validation>,
 }
 
 /// Um gráfico com os dados que ele mostra agora.
@@ -330,7 +332,7 @@ impl Engine {
     /// Pasta nova, com uma planilha vazia.
     pub fn new() -> Result<Self, String> {
         let model = UserModel::new_empty("Pasta1", LOCALE, TIMEZONE, LANGUAGE)?;
-        Ok(Self { model, copied: None, charts: Vec::new() })
+        Ok(Self { model, copied: None, charts: Vec::new(), validations: Vec::new() })
     }
 
     /// Abre um arquivo `.xlsx`.
@@ -339,9 +341,10 @@ impl Engine {
         let model = load_from_xlsx(file_name, LOCALE, TIMEZONE, LANGUAGE).map_err(|e| e.to_string())?;
         let mut model = UserModel::from_model(model);
         model.evaluate();
-        let mut engine = Self { model, copied: None, charts: Vec::new() };
+        let mut engine = Self { model, copied: None, charts: Vec::new(), validations: Vec::new() };
         if let Ok(bytes) = fs::read(path) {
             engine.charts = charts::read_from(&bytes, &engine.sheet_names());
+            engine.validations = crate::validation::read_from(&bytes, &engine.sheet_names());
         }
         Ok(engine)
     }
@@ -388,6 +391,7 @@ impl Engine {
             .into_inner();
         let with_data: Vec<(Chart, ChartData)> =
             self.charts.iter().map(|chart| (chart.clone(), self.data_of(chart))).collect();
+        let buffer = crate::validation::write_into(buffer, &self.sheet_names(), &self.validations)?;
         let buffer = charts::write_into(buffer, &self.sheet_names(), &with_data)?;
         // Grava num arquivo temporário e troca no fim, para uma falha no meio
         // do caminho não estragar o arquivo que já existia.
@@ -437,6 +441,7 @@ impl Engine {
         self.copied = None;
         self.model.delete_sheet(sheet)?;
         // Os gráficos da planilha somem com ela; os das seguintes sobem um índice.
+        self.drop_validations_of(sheet);
         self.charts.retain(|chart| chart.sheet != sheet);
         for chart in &mut self.charts {
             if chart.sheet > sheet {
@@ -555,6 +560,7 @@ impl Engine {
 
     /// Grava o conteúdo de uma célula. Texto vazio apaga a célula.
     pub fn set_cell(&mut self, sheet: u32, col: u32, row: u32, input: &str) -> Result<(), String> {
+        self.check_input(sheet, col, row, input)?;
         let (row, col) = to_ironcalc(col, row)?;
         let input = if input.trim().is_empty() { "" } else { input };
         self.model.set_user_input(sheet, row, col, input)
@@ -2535,12 +2541,18 @@ mod tests {
         // Só o que passa de 15 ganha cor de fundo, cor de texto e negrito.
         assert!(cell(&e, 0, 0).unwrap().style.is_none());
         let painted = cell(&e, 0, 1).unwrap().style.unwrap();
-        assert_eq!((painted.fill.as_deref(), painted.color.as_deref(), painted.bold), (Some("#FFC7CE"), Some("#9C0006"), true));
+        assert_eq!(
+            (painted.fill.as_deref(), painted.color.as_deref(), painted.bold),
+            (Some("#FFC7CE"), Some("#9C0006"), true)
+        );
         assert!(cell(&e, 0, 2).unwrap().style.unwrap().bold);
 
         let rules = e.cond_rules(0).unwrap();
         assert_eq!(rules.len(), 1);
-        assert_eq!((rules[0].kind, rules[0].value.as_str(), rules[0].range.as_str()), (CondKind::Greater, "15", "A1:A4"));
+        assert_eq!(
+            (rules[0].kind, rules[0].value.as_str(), rules[0].range.as_str()),
+            (CondKind::Greater, "15", "A1:A4")
+        );
         assert_eq!(rules[0].fill.as_deref(), Some("#FFC7CE"));
 
         // Trocar a regra repinta; o resultado sobrevive a salvar e abrir.
@@ -2613,6 +2625,98 @@ mod tests {
         assert!(e.update_cond_rule(0, rule("A1", CondKind::Greater, "1")).is_err());
         assert!(e.delete_cond_rule(0, 7).is_err());
         assert!(e.cond_rules(0).unwrap().is_empty());
+    }
+
+    fn dv(
+        range: &str,
+        kind: crate::validation::ValidationKind,
+        value: &str,
+        value2: &str,
+    ) -> crate::validation::Validation {
+        use crate::validation::ValidationOp;
+        crate::validation::Validation {
+            id: 0,
+            sheet: 0,
+            range: range.into(),
+            kind,
+            operator: if value2.is_empty() { ValidationOp::GreaterEqual } else { ValidationOp::Between },
+            value: value.into(),
+            value2: value2.into(),
+            message: String::new(),
+        }
+    }
+
+    #[test]
+    fn validation_blocks_bad_input_and_offers_lists() {
+        use crate::validation::ValidationKind::*;
+        let mut e = engine(&[(5, 0, "Sim"), (5, 1, "Não")]);
+        e.add_validation(0, dv("A1:A3", Whole, "1", "10")).unwrap();
+        e.add_validation(0, dv("B1", List, "Sim; Não", "")).unwrap();
+        e.add_validation(0, dv("C1", List, "=F1:F2", "")).unwrap();
+        e.add_validation(0, dv("D1", Decimal, "0,5", "")).unwrap();
+        e.add_validation(0, dv("E1", TextLength, "3", "")).unwrap();
+
+        assert!(e.set_cell(0, 0, 0, "5").is_ok());
+        let err = e.set_cell(0, 0, 1, "11").unwrap_err();
+        assert!(err.starts_with("Validação: Digite um número inteiro entre 1 e 10"), "{err}");
+        assert!(e.set_cell(0, 0, 1, "2,5").is_err());
+        assert!(e.set_cell(0, 0, 1, "abc").is_err());
+        assert!(e.set_cell(0, 0, 1, "").is_ok());
+        assert!(e.set_cell(0, 0, 2, "=1+1").is_ok());
+        assert!(e.set_cell(0, 1, 0, "sim").is_ok());
+        assert!(e.set_cell(0, 1, 0, "Talvez").is_err());
+        assert!(e.set_cell(0, 2, 0, "Não").is_ok());
+        assert!(e.set_cell(0, 2, 0, "Sim?").is_err());
+        assert!(e.set_cell(0, 3, 0, "0,5").is_ok());
+        assert!(e.set_cell(0, 3, 0, "0,4").is_err());
+        assert!(e.set_cell(0, 4, 0, "abc").is_ok());
+        assert!(e.set_cell(0, 4, 0, "ab").is_err());
+        assert_eq!(e.list_options(0, 1, 0).unwrap().unwrap(), vec!["Sim", "Não"]);
+        assert_eq!(e.list_options(0, 2, 0).unwrap().unwrap(), vec!["Sim", "Não"]);
+        assert!(e.list_options(0, 0, 0).unwrap().is_none());
+    }
+
+    #[test]
+    fn validation_rejects_bad_rules_and_follows_sheets() {
+        use crate::validation::ValidationKind::*;
+        let mut e = engine(&[]);
+        assert!(e.add_validation(0, dv("xx", Whole, "1", "")).is_err());
+        assert!(e.add_validation(0, dv("A1", Whole, "um", "")).is_err());
+        assert!(e.add_validation(0, dv("A1", Whole, "1", "x")).is_err());
+        assert!(e.add_validation(0, dv("A1", List, "", "")).is_err());
+        assert!(e.add_validation(0, dv("A1", List, "a, b", "")).is_err());
+        assert!(e.add_validation(9, dv("A1", Whole, "1", "")).is_err());
+        e.add_validation(0, dv("A1", Whole, "1", "")).unwrap();
+        let id = e.validations(0)[0].id;
+        assert!(e.delete_validation(id).is_ok());
+        assert!(e.delete_validation(id).is_err());
+    }
+
+    #[test]
+    fn validation_roundtrips_through_xlsx() {
+        use crate::validation::ValidationKind::*;
+        let mut e = engine(&[(5, 0, "x")]);
+        e.add_validation(0, dv("A1:A3", Whole, "1", "10")).unwrap();
+        e.add_validation(0, dv("B1", List, "Sim; Não", "")).unwrap();
+        e.add_validation(0, dv("C1", List, "=F1:F2", "")).unwrap();
+        e.add_validation(0, dv("D1", Decimal, "0,5", "")).unwrap();
+        e.add_validation(0, dv("E1", TextLength, "3", "")).unwrap();
+        let path = temp_xlsx("validacao");
+        e.save(&path).unwrap();
+        if let Ok(copy) = std::env::var("ABACUS_KEEP_XLSX") {
+            fs::copy(&path, copy).unwrap();
+        }
+        let back = Engine::open(&path).unwrap();
+        fs::remove_file(&path).unwrap();
+        let strip = |list: Vec<crate::validation::Validation>| {
+            list.into_iter()
+                .map(|mut r| {
+                    r.id = 0;
+                    r
+                })
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(strip(back.validations(0)), strip(e.validations(0)));
     }
 
     #[test]
