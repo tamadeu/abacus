@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 use zip::write::SimpleFileOptions;
 use zip::{ZipArchive, ZipWriter};
 
+use crate::chart_trend::{self, Trend, TrendKind, TrendLine};
 use crate::engine::Range;
 
 /// Colunas e linhas que um gráfico pode usar de dados, para não gastar a
@@ -39,6 +40,85 @@ pub enum ChartKind {
     Bar,
     Line,
     Pie,
+    Area,
+    /// Dispersão (XY): a primeira coluna são os valores de X.
+    Scatter,
+    Donut,
+}
+
+/// Como as séries se empilham (colunas, barras, linhas e áreas).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Stacking {
+    #[default]
+    None,
+    Stacked,
+    /// Empilhado até 100%.
+    Percent,
+}
+
+/// Onde fica a legenda.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum LegendPos {
+    /// Aparece embaixo quando há mais de uma série (ou na pizza).
+    #[default]
+    Auto,
+    None,
+    Bottom,
+    Right,
+    Top,
+    Left,
+}
+
+/// Aparência e extras de uma série, na ordem em que as séries saem do intervalo.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct SeriesStyle {
+    /// `#RRGGBB`; sem cor, vale a da paleta.
+    pub color: Option<String>,
+    /// Em colunas, a série vira linha (gráfico combinado).
+    pub line: bool,
+    /// Usa o eixo de valores da direita.
+    pub secondary: bool,
+    pub trend: Option<Trend>,
+}
+
+/// As opções de aparência de um gráfico.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct ChartOptions {
+    pub stacking: Stacking,
+    pub legend: LegendPos,
+    /// Mostra o valor (ou o percentual, na pizza) sobre os dados.
+    pub labels: bool,
+    /// Título do eixo das categorias (ou do X, na dispersão).
+    pub x_title: String,
+    /// Título do eixo de valores.
+    pub y_title: String,
+    pub y_min: Option<f64>,
+    pub y_max: Option<f64>,
+    pub grid: bool,
+    /// Linhas suavizadas.
+    pub smooth: bool,
+    pub styles: Vec<SeriesStyle>,
+}
+
+impl Default for ChartOptions {
+    fn default() -> Self {
+        ChartOptions {
+            stacking: Stacking::None,
+            legend: LegendPos::Auto,
+            labels: false,
+            x_title: String::new(),
+            y_title: String::new(),
+            y_min: None,
+            y_max: None,
+            grid: true,
+            smooth: false,
+            styles: Vec::new(),
+        }
+    }
 }
 
 /// Um gráfico: os dados vêm de um intervalo da própria planilha e ele fica
@@ -55,6 +135,61 @@ pub struct Chart {
     pub from_row: u32,
     pub to_col: u32,
     pub to_row: u32,
+    #[serde(flatten)]
+    pub opts: ChartOptions,
+}
+
+impl Chart {
+    /// O estilo da série `index` (o padrão, se não houver).
+    pub fn style(&self, index: usize) -> SeriesStyle {
+        self.opts.styles.get(index).cloned().unwrap_or_default()
+    }
+
+    /// Cor da série, sem o `#`.
+    pub fn color(&self, index: usize) -> String {
+        self.opts
+            .styles
+            .get(index)
+            .and_then(|s| s.color.as_deref())
+            .and_then(|c| valid_color(c))
+            .unwrap_or_else(|| PALETTE[index % PALETTE.len()].to_string())
+    }
+
+    /// Mantém só o que o tipo do gráfico aceita.
+    pub fn normalize(&mut self) {
+        let cartesian = !matches!(self.kind, ChartKind::Pie | ChartKind::Donut | ChartKind::Scatter);
+        let combinable = matches!(self.kind, ChartKind::Column | ChartKind::Line | ChartKind::Area);
+        if !cartesian {
+            self.opts.stacking = Stacking::None;
+        }
+        let pie = matches!(self.kind, ChartKind::Pie | ChartKind::Donut);
+        for style in &mut self.opts.styles {
+            style.line &= self.kind == ChartKind::Column;
+            style.secondary &= combinable;
+            style.color = style.color.as_deref().and_then(valid_color).map(|c| format!("#{c}"));
+            if pie {
+                style.trend = None;
+            }
+            style.trend = style.trend.as_ref().map(Trend::sanitized);
+        }
+        if pie {
+            self.opts.y_min = None;
+            self.opts.y_max = None;
+        }
+        // Um mínimo acima do máximo não desenha nada.
+        if let (Some(min), Some(max)) = (self.opts.y_min, self.opts.y_max) {
+            if min >= max {
+                self.opts.y_max = None;
+            }
+        }
+        self.opts.styles.truncate(MAX_CHART_COLS as usize);
+    }
+}
+
+/// `#RRGGBB` ou `RRGGBB` como `RRGGBB` em maiúsculas.
+fn valid_color(text: &str) -> Option<String> {
+    let hex = text.strip_prefix('#').unwrap_or(text);
+    (hex.len() == 6 && hex.chars().all(|c| c.is_ascii_hexdigit())).then(|| hex.to_ascii_uppercase())
 }
 
 /// Uma série de valores; células vazias ou de texto ficam como `None`.
@@ -62,12 +197,17 @@ pub struct Chart {
 pub struct Series {
     pub name: String,
     pub values: Vec<Option<f64>>,
+    /// A linha de tendência pedida para a série.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub trend: Option<TrendLine>,
 }
 
 /// O que o gráfico mostra, tirado das células.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct ChartData {
     pub categories: Vec<String>,
+    /// Valores de X de cada categoria: o número da primeira coluna na dispersão, 1, 2, 3… nos demais.
+    pub x: Vec<Option<f64>>,
     pub series: Vec<Series>,
     /// A primeira coluna do intervalo é de categorias.
     #[serde(skip)]
@@ -90,14 +230,15 @@ struct Layout {
     header: bool,
 }
 
-fn layout(range: Range, cell: &impl Fn(u32, u32) -> CellInfo) -> Layout {
+fn layout(range: Range, scatter: bool, cell: &impl Fn(u32, u32) -> CellInfo) -> Layout {
     let first_series_col = |categories: bool| u32::from(categories);
-    // A primeira coluna vira categorias quando tem texto (fora o título).
+    // A primeira coluna vira categorias quando tem texto (fora o título); na dispersão, é sempre o X.
     let categories = range.cols >= 2
-        && (0..range.rows).any(|offset| {
-            let info = cell(range.row + offset, range.col);
-            offset > 0 && info.number.is_none() && !info.text.is_empty()
-        });
+        && (scatter
+            || (0..range.rows).any(|offset| {
+                let info = cell(range.row + offset, range.col);
+                offset > 0 && info.number.is_none() && !info.text.is_empty()
+            }));
     // A primeira linha é de títulos quando as séries começam por texto.
     let header = range.rows >= 2
         && (first_series_col(categories)..range.cols).all(|offset| {
@@ -108,22 +249,47 @@ fn layout(range: Range, cell: &impl Fn(u32, u32) -> CellInfo) -> Layout {
 }
 
 /// As categorias e séries de um intervalo.
-pub fn build_data(range: Range, cell: impl Fn(u32, u32) -> CellInfo) -> ChartData {
-    let layout = layout(range, &cell);
+pub fn build_data(range: Range, scatter: bool, cell: impl Fn(u32, u32) -> CellInfo) -> ChartData {
+    let layout = layout(range, scatter, &cell);
     let first_row = range.row + u32::from(layout.header);
     let last_row = range.row + range.rows;
     let first_col = range.col + u32::from(layout.categories);
     let categories = (first_row..last_row)
         .map(|row| if layout.categories { cell(row, range.col).text } else { (row - first_row + 1).to_string() })
         .collect();
+    let x = (first_row..last_row)
+        .map(|row| {
+            if scatter && layout.categories {
+                cell(row, range.col).number
+            } else {
+                Some(f64::from(row - first_row + 1))
+            }
+        })
+        .collect();
     let series = (first_col..range.col + range.cols)
         .enumerate()
         .map(|(index, col)| Series {
             name: if layout.header { cell(range.row, col).text } else { format!("Série {}", index + 1) },
             values: (first_row..last_row).map(|row| cell(row, col).number).collect(),
+            trend: None,
         })
         .collect();
-    ChartData { categories, series, has_categories: layout.categories, has_header: layout.header }
+    ChartData { categories, x, series, has_categories: layout.categories, has_header: layout.header }
+}
+
+/// Os dados de um gráfico, já com as linhas de tendência pedidas.
+pub fn data_for(chart: &Chart, cell: impl Fn(u32, u32) -> CellInfo) -> ChartData {
+    let mut data = build_data(chart.range, chart.kind == ChartKind::Scatter, cell);
+    for (index, series) in data.series.iter_mut().enumerate() {
+        let Some(trend) = chart.style(index).trend else { continue };
+        let points: Vec<(f64, f64)> =
+            data.x.iter().zip(&series.values).filter_map(|(x, y)| Some(((*x)?, (*y)?))).collect();
+        let line = chart_trend::compute(&trend, &points);
+        if !line.points.is_empty() {
+            series.trend = Some(line);
+        }
+    }
+    data
 }
 
 // ---------------------------------------------------------------------------
@@ -179,104 +345,273 @@ fn fill(color: &str) -> String {
     format!("<a:solidFill><a:srgbClr val=\"{color}\"/></a:solidFill>")
 }
 
-/// O XML de um gráfico (`xl/charts/chartN.xml`).
-fn chart_xml(chart: &Chart, data: &ChartData, sheet_name: &str) -> String {
+/// Famílias de gráficos que o Excel escreve cada uma num elemento.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Group {
+    Bar,
+    Line,
+    Area,
+    Scatter,
+    Pie,
+    Donut,
+}
+
+const TEXT_STYLE: &str = "<c:txPr><a:bodyPr/><a:lstStyle/><a:p><a:pPr><a:defRPr sz=\"900\"/></a:pPr><a:endParaRPr lang=\"pt-BR\"/></a:p></c:txPr>";
+
+fn text_title(text: &str, size: u32, bold: bool) -> String {
+    let b = u8::from(bold);
+    format!(
+        "<c:title><c:tx><c:rich><a:bodyPr/><a:lstStyle/><a:p><a:pPr><a:defRPr sz=\"{size}\" b=\"{b}\"/></a:pPr><a:r><a:rPr lang=\"pt-BR\" sz=\"{size}\" b=\"{b}\"/><a:t>{}</a:t></a:r></a:p></c:rich></c:tx><c:overlay val=\"0\"/></c:title>",
+        escape(text)
+    )
+}
+
+fn grouping(stacking: Stacking) -> &'static str {
+    match stacking {
+        Stacking::None => "clustered",
+        Stacking::Stacked => "stacked",
+        Stacking::Percent => "percentStacked",
+    }
+}
+
+/// Uma série, no elemento certo para a família.
+fn series_xml(chart: &Chart, data: &ChartData, sheet_name: &str, index: usize, group: Group) -> String {
     let layout_info = Layout { categories: data.has_categories, header: data.has_header };
     let first_row = chart.range.row + u32::from(layout_info.header);
     let first_col = chart.range.col + u32::from(layout_info.categories);
     let n = data.categories.len() as u32;
+    let series = &data.series[index];
+    let col = first_col + index as u32;
+    let color = chart.color(index);
 
-    let category_xml = if layout_info.categories {
+    let name = if layout_info.header {
         format!(
-            "<c:cat><c:strRef><c:f>{}</c:f>{}</c:strRef></c:cat>",
-            escape(&reference(sheet_name, chart.range.col, first_row, 1, n)),
-            str_cache(&data.categories)
+            "<c:tx><c:strRef><c:f>{}</c:f>{}</c:strRef></c:tx>",
+            escape(&reference(sheet_name, col, chart.range.row, 1, 1)),
+            str_cache(std::slice::from_ref(&series.name))
+        )
+    } else {
+        format!("<c:tx><c:v>{}</c:v></c:tx>", escape(&series.name))
+    };
+    let marker = |size: u32| {
+        format!(
+            "<c:marker><c:symbol val=\"circle\"/><c:size val=\"{size}\"/><c:spPr>{}</c:spPr></c:marker>",
+            fill(&color)
+        )
+    };
+    let (shape, marker_xml, invert) = match group {
+        Group::Bar => (format!("<c:spPr>{}</c:spPr>", fill(&color)), String::new(), "<c:invertIfNegative val=\"0\"/>"),
+        Group::Area => (format!("<c:spPr>{}</c:spPr>", fill(&color)), String::new(), ""),
+        Group::Line => {
+            (format!("<c:spPr><a:ln w=\"28575\" cap=\"rnd\">{}<a:round/></a:ln></c:spPr>", fill(&color)), marker(5), "")
+        }
+        Group::Scatter => ("<c:spPr><a:ln w=\"19050\"><a:noFill/></a:ln></c:spPr>".to_string(), marker(7), ""),
+        Group::Pie | Group::Donut => (String::new(), String::new(), ""),
+    };
+    let slices = if matches!(group, Group::Pie | Group::Donut) {
+        (0..data.categories.len())
+            .map(|i| {
+                format!(
+                    "<c:dPt><c:idx val=\"{i}\"/><c:bubble3D val=\"0\"/><c:spPr>{}</c:spPr></c:dPt>",
+                    fill(PALETTE[i % PALETTE.len()])
+                )
+            })
+            .collect()
+    } else {
+        String::new()
+    };
+    let labels = if chart.opts.labels {
+        let percent = matches!(group, Group::Pie | Group::Donut);
+        format!(
+            "<c:dLbls>{TEXT_STYLE}<c:showLegendKey val=\"0\"/><c:showVal val=\"{}\"/><c:showCatName val=\"0\"/><c:showSerName val=\"0\"/><c:showPercent val=\"{}\"/><c:showBubbleSize val=\"0\"/></c:dLbls>",
+            u8::from(!percent),
+            u8::from(percent)
         )
     } else {
         String::new()
     };
-
-    let series_xml: String = data
-        .series
-        .iter()
-        .enumerate()
-        .map(|(index, series)| {
-            let col = first_col + index as u32;
-            let color = PALETTE[index % PALETTE.len()];
-            let name = if layout_info.header {
-                format!(
-                    "<c:tx><c:strRef><c:f>{}</c:f>{}</c:strRef></c:tx>",
-                    escape(&reference(sheet_name, col, chart.range.row, 1, 1)),
-                    str_cache(std::slice::from_ref(&series.name))
-                )
-            } else {
-                format!("<c:tx><c:v>{}</c:v></c:tx>", escape(&series.name))
+    let trend = match chart.style(index).trend {
+        Some(t) if !matches!(group, Group::Pie | Group::Donut) => {
+            let t = t.sanitized();
+            let (kind, extra) = match t.kind {
+                TrendKind::Linear => ("linear", String::new()),
+                TrendKind::Poly => ("poly", format!("<c:order val=\"{}\"/>", t.order)),
+                TrendKind::Exp => ("exp", String::new()),
+                TrendKind::Log => ("log", String::new()),
+                TrendKind::Moving => ("movingAvg", format!("<c:period val=\"{}\"/>", t.period)),
             };
-            let look = match chart.kind {
-                ChartKind::Line => format!(
-                    "<c:spPr><a:ln w=\"28575\" cap=\"rnd\">{}<a:round/></a:ln></c:spPr><c:marker><c:symbol val=\"circle\"/><c:size val=\"5\"/><c:spPr>{}</c:spPr></c:marker>",
-                    fill(color),
-                    fill(color)
-                ),
-                ChartKind::Pie => {
-                    let slices: String = (0..data.categories.len())
-                        .map(|i| format!("<c:dPt><c:idx val=\"{i}\"/><c:bubble3D val=\"0\"/><c:spPr>{}</c:spPr></c:dPt>", fill(PALETTE[i % PALETTE.len()])))
-                        .collect();
-                    slices
-                }
-                _ => format!("<c:spPr>{}</c:spPr><c:invertIfNegative val=\"0\"/>", fill(color)),
-            };
-            // `look` tem o `spPr` primeiro, exceto na pizza, onde as fatias vêm depois do nome.
-            let values = format!(
-                "<c:val><c:numRef><c:f>{}</c:f>{}</c:numRef></c:val>",
-                escape(&reference(sheet_name, col, first_row, 1, n)),
-                num_cache(&series.values)
-            );
-            let smooth = if chart.kind == ChartKind::Line { "<c:smooth val=\"0\"/>" } else { "" };
+            let flags = format!("<c:dispRSqr val=\"{}\"/><c:dispEq val=\"{}\"/>", u8::from(t.r2), u8::from(t.equation));
             format!(
-                "<c:ser><c:idx val=\"{index}\"/><c:order val=\"{index}\"/>{name}{look}{category_xml}{values}{smooth}</c:ser>"
+                "<c:trendline><c:spPr><a:ln w=\"19050\" cap=\"rnd\">{}<a:prstDash val=\"sysDash\"/></a:ln></c:spPr><c:trendlineType val=\"{kind}\"/>{extra}{flags}</c:trendline>",
+                fill(&color)
             )
-        })
-        .collect();
-
-    let text_style = "<c:txPr><a:bodyPr/><a:lstStyle/><a:p><a:pPr><a:defRPr sz=\"900\"/></a:pPr><a:endParaRPr lang=\"pt-BR\"/></a:p></c:txPr>";
-    let (plot, axes) = match chart.kind {
-        ChartKind::Pie => (
-            format!("<c:pieChart><c:varyColors val=\"1\"/>{series_xml}<c:firstSliceAng val=\"0\"/></c:pieChart>"),
-            String::new(),
-        ),
-        kind => {
-            let (cat_pos, val_pos) = if kind == ChartKind::Bar { ("l", "b") } else { ("b", "l") };
-            let body = match kind {
-                ChartKind::Line => format!(
-                    "<c:lineChart><c:grouping val=\"standard\"/><c:varyColors val=\"0\"/>{series_xml}<c:marker val=\"1\"/><c:axId val=\"111\"/><c:axId val=\"222\"/></c:lineChart>"
-                ),
-                _ => format!(
-                    "<c:barChart><c:barDir val=\"{}\"/><c:grouping val=\"clustered\"/><c:varyColors val=\"0\"/>{series_xml}<c:gapWidth val=\"80\"/><c:axId val=\"111\"/><c:axId val=\"222\"/></c:barChart>",
-                    if kind == ChartKind::Bar { "bar" } else { "col" }
-                ),
-            };
-            let axes = format!(
-                "<c:catAx><c:axId val=\"111\"/><c:scaling><c:orientation val=\"minMax\"/></c:scaling><c:delete val=\"0\"/><c:axPos val=\"{cat_pos}\"/><c:numFmt formatCode=\"General\" sourceLinked=\"0\"/><c:majorTickMark val=\"none\"/><c:minorTickMark val=\"none\"/><c:tickLblPos val=\"nextTo\"/>{text_style}<c:crossAx val=\"222\"/><c:crosses val=\"autoZero\"/><c:auto val=\"1\"/><c:lblAlgn val=\"ctr\"/><c:lblOffset val=\"100\"/><c:noMultiLvlLbl val=\"0\"/></c:catAx>\
-<c:valAx><c:axId val=\"222\"/><c:scaling><c:orientation val=\"minMax\"/></c:scaling><c:delete val=\"0\"/><c:axPos val=\"{val_pos}\"/><c:majorGridlines><c:spPr><a:ln w=\"6350\"><a:solidFill><a:srgbClr val=\"E5E7EB\"/></a:solidFill></a:ln></c:spPr></c:majorGridlines><c:numFmt formatCode=\"General\" sourceLinked=\"0\"/><c:majorTickMark val=\"none\"/><c:minorTickMark val=\"none\"/><c:tickLblPos val=\"nextTo\"/>{text_style}<c:crossAx val=\"111\"/><c:crosses val=\"autoZero\"/><c:crossBetween val=\"between\"/></c:valAx>"
-            );
-            (body, axes)
         }
+        _ => String::new(),
     };
+    let values_ref = escape(&reference(sheet_name, col, first_row, 1, n));
+    let axis_values = if group == Group::Scatter {
+        let x_ref = escape(&reference(sheet_name, chart.range.col, first_row, 1, n));
+        format!(
+            "<c:xVal><c:numRef><c:f>{x_ref}</c:f>{}</c:numRef></c:xVal><c:yVal><c:numRef><c:f>{values_ref}</c:f>{}</c:numRef></c:yVal>",
+            num_cache(&data.x),
+            num_cache(&series.values)
+        )
+    } else {
+        let categories = if layout_info.categories {
+            format!(
+                "<c:cat><c:strRef><c:f>{}</c:f>{}</c:strRef></c:cat>",
+                escape(&reference(sheet_name, chart.range.col, first_row, 1, n)),
+                str_cache(&data.categories)
+            )
+        } else {
+            String::new()
+        };
+        format!("{categories}<c:val><c:numRef><c:f>{values_ref}</c:f>{}</c:numRef></c:val>", num_cache(&series.values))
+    };
+    let smooth = match group {
+        Group::Line | Group::Scatter => format!("<c:smooth val=\"{}\"/>", u8::from(chart.opts.smooth)),
+        _ => String::new(),
+    };
+    format!(
+        "<c:ser><c:idx val=\"{index}\"/><c:order val=\"{index}\"/>{name}{shape}{invert}{marker_xml}{slices}{labels}{trend}{axis_values}{smooth}</c:ser>"
+    )
+}
+
+/// O XML de um gráfico (`xl/charts/chartN.xml`).
+fn chart_xml(chart: &Chart, data: &ChartData, sheet_name: &str) -> String {
+    let mut chart = chart.clone();
+    chart.normalize();
+    let chart = &chart;
+    let opts = &chart.opts;
+    let count = data.series.len();
+    let kind = chart.kind;
+    let secondary_of = |i: usize| chart.style(i).secondary;
+    let line_of = |i: usize| chart.style(i).line;
+
+    let base_group = match kind {
+        ChartKind::Column | ChartKind::Bar => Group::Bar,
+        ChartKind::Line => Group::Line,
+        ChartKind::Area => Group::Area,
+        ChartKind::Scatter => Group::Scatter,
+        ChartKind::Pie => Group::Pie,
+        ChartKind::Donut => Group::Donut,
+    };
+    let stacking_value = match (opts.stacking, base_group) {
+        (Stacking::None, Group::Line) => "standard",
+        (Stacking::None, Group::Area) => "standard",
+        (other, _) => grouping(other),
+    };
+    let mut plot = String::new();
+    let mut axes = String::new();
+    let mut has_secondary = false;
+
+    if matches!(base_group, Group::Pie | Group::Donut) {
+        let sers = (0..count).map(|i| series_xml(chart, data, sheet_name, i, base_group)).collect::<String>();
+        plot = if base_group == Group::Pie {
+            format!("<c:pieChart><c:varyColors val=\"1\"/>{sers}<c:firstSliceAng val=\"0\"/></c:pieChart>")
+        } else {
+            format!(
+                "<c:doughnutChart><c:varyColors val=\"1\"/>{sers}<c:firstSliceAng val=\"0\"/><c:holeSize val=\"55\"/></c:doughnutChart>"
+            )
+        };
+    } else {
+        // Primeiro o eixo principal, depois o secundário; em cada um, a família da base e as linhas do combinado.
+        for secondary in [false, true] {
+            for overlay_lines in [false, true] {
+                let members: Vec<usize> = (0..count)
+                    .filter(|&i| {
+                        secondary_of(i) == secondary && (kind == ChartKind::Column && line_of(i)) == overlay_lines
+                    })
+                    .collect();
+                if members.is_empty() {
+                    continue;
+                }
+                has_secondary |= secondary;
+                let group = if overlay_lines { Group::Line } else { base_group };
+                let sers: String = members.iter().map(|&i| series_xml(chart, data, sheet_name, i, group)).collect();
+                let (cat_id, val_id) = if secondary { (333, 444) } else { (111, 222) };
+                let ids = format!("<c:axId val=\"{cat_id}\"/><c:axId val=\"{val_id}\"/>");
+                plot.push_str(&match group {
+                    Group::Bar => {
+                        let overlap = if opts.stacking == Stacking::None { "" } else { "<c:overlap val=\"100\"/>" };
+                        format!(
+                            "<c:barChart><c:barDir val=\"{}\"/><c:grouping val=\"{stacking_value}\"/><c:varyColors val=\"0\"/>{sers}<c:gapWidth val=\"80\"/>{overlap}{ids}</c:barChart>",
+                            if kind == ChartKind::Bar { "bar" } else { "col" }
+                        )
+                    }
+                    Group::Line => {
+                        let grouping = if overlay_lines { "standard" } else { stacking_value };
+                        format!(
+                            "<c:lineChart><c:grouping val=\"{grouping}\"/><c:varyColors val=\"0\"/>{sers}<c:marker val=\"1\"/>{ids}</c:lineChart>"
+                        )
+                    }
+                    Group::Area => format!(
+                        "<c:areaChart><c:grouping val=\"{stacking_value}\"/><c:varyColors val=\"0\"/>{sers}{ids}</c:areaChart>"
+                    ),
+                    _ => format!(
+                        "<c:scatterChart><c:scatterStyle val=\"lineMarker\"/><c:varyColors val=\"0\"/>{sers}{ids}</c:scatterChart>"
+                    ),
+                });
+            }
+        }
+
+        let scaling = {
+            let max = opts.y_max.map(|v| format!("<c:max val=\"{v}\"/>")).unwrap_or_default();
+            let min = opts.y_min.map(|v| format!("<c:min val=\"{v}\"/>")).unwrap_or_default();
+            move |orientation: &str| format!("<c:scaling><c:orientation val=\"{orientation}\"/>{max}{min}</c:scaling>")
+        };
+        let horizontal = kind == ChartKind::Bar;
+        let (cat_pos, val_pos) = if horizontal { ("l", "b") } else { ("b", "l") };
+        let grid = if opts.grid {
+            "<c:majorGridlines><c:spPr><a:ln w=\"6350\"><a:solidFill><a:srgbClr val=\"E5E7EB\"/></a:solidFill></a:ln></c:spPr></c:majorGridlines>"
+        } else {
+            ""
+        };
+        let number_format = if opts.stacking == Stacking::Percent { "0%" } else { "General" };
+        let title_of = |text: &str| if text.is_empty() { String::new() } else { text_title(text, 900, false) };
+        let x_title = title_of(&opts.x_title);
+        let y_title = title_of(&opts.y_title);
+        let flat = |id: u32| format!("<c:axId val=\"{id}\"/>");
+        let _ = flat;
+        if kind == ChartKind::Scatter {
+            axes.push_str(&format!(
+                "<c:valAx><c:axId val=\"111\"/><c:scaling><c:orientation val=\"minMax\"/></c:scaling><c:delete val=\"0\"/><c:axPos val=\"b\"/>{x_title}<c:numFmt formatCode=\"General\" sourceLinked=\"0\"/><c:majorTickMark val=\"none\"/><c:minorTickMark val=\"none\"/><c:tickLblPos val=\"nextTo\"/>{TEXT_STYLE}<c:crossAx val=\"222\"/><c:crosses val=\"autoZero\"/><c:crossBetween val=\"midCat\"/></c:valAx>\
+<c:valAx><c:axId val=\"222\"/>{}<c:delete val=\"0\"/><c:axPos val=\"l\"/>{grid}{y_title}<c:numFmt formatCode=\"General\" sourceLinked=\"0\"/><c:majorTickMark val=\"none\"/><c:minorTickMark val=\"none\"/><c:tickLblPos val=\"nextTo\"/>{TEXT_STYLE}<c:crossAx val=\"111\"/><c:crosses val=\"autoZero\"/><c:crossBetween val=\"midCat\"/></c:valAx>",
+                scaling("minMax")
+            ));
+        } else {
+            let (cat_orientation, val_crosses) = if horizontal { ("maxMin", "max") } else { ("minMax", "autoZero") };
+            let between = if kind == ChartKind::Area { "midCat" } else { "between" };
+            axes.push_str(&format!(
+                "<c:catAx><c:axId val=\"111\"/><c:scaling><c:orientation val=\"{cat_orientation}\"/></c:scaling><c:delete val=\"0\"/><c:axPos val=\"{cat_pos}\"/>{x_title}<c:numFmt formatCode=\"General\" sourceLinked=\"0\"/><c:majorTickMark val=\"none\"/><c:minorTickMark val=\"none\"/><c:tickLblPos val=\"nextTo\"/>{TEXT_STYLE}<c:crossAx val=\"222\"/><c:crosses val=\"autoZero\"/><c:auto val=\"1\"/><c:lblAlgn val=\"ctr\"/><c:lblOffset val=\"100\"/><c:noMultiLvlLbl val=\"0\"/></c:catAx>\
+<c:valAx><c:axId val=\"222\"/>{}<c:delete val=\"0\"/><c:axPos val=\"{val_pos}\"/>{grid}{y_title}<c:numFmt formatCode=\"{number_format}\" sourceLinked=\"0\"/><c:majorTickMark val=\"none\"/><c:minorTickMark val=\"none\"/><c:tickLblPos val=\"nextTo\"/>{TEXT_STYLE}<c:crossAx val=\"111\"/><c:crosses val=\"{val_crosses}\"/><c:crossBetween val=\"{between}\"/></c:valAx>",
+                scaling("minMax")
+            ));
+            if has_secondary {
+                axes.push_str(&format!(
+                    "<c:catAx><c:axId val=\"333\"/><c:scaling><c:orientation val=\"minMax\"/></c:scaling><c:delete val=\"1\"/><c:axPos val=\"b\"/><c:majorTickMark val=\"none\"/><c:minorTickMark val=\"none\"/><c:tickLblPos val=\"nextTo\"/><c:crossAx val=\"444\"/><c:crosses val=\"autoZero\"/><c:auto val=\"1\"/><c:lblAlgn val=\"ctr\"/><c:lblOffset val=\"100\"/><c:noMultiLvlLbl val=\"0\"/></c:catAx>\
+<c:valAx><c:axId val=\"444\"/><c:scaling><c:orientation val=\"minMax\"/></c:scaling><c:delete val=\"0\"/><c:axPos val=\"r\"/><c:numFmt formatCode=\"General\" sourceLinked=\"0\"/><c:majorTickMark val=\"none\"/><c:minorTickMark val=\"none\"/><c:tickLblPos val=\"nextTo\"/>{TEXT_STYLE}<c:crossAx val=\"333\"/><c:crosses val=\"max\"/><c:crossBetween val=\"{between}\"/></c:valAx>"
+                ));
+            }
+        }
+    }
 
     let title = if chart.title.is_empty() {
         "<c:autoTitleDeleted val=\"1\"/>".to_string()
     } else {
-        format!(
-            "<c:title><c:tx><c:rich><a:bodyPr/><a:lstStyle/><a:p><a:pPr><a:defRPr sz=\"1200\" b=\"1\"/></a:pPr><a:r><a:rPr lang=\"pt-BR\" sz=\"1200\" b=\"1\"/><a:t>{}</a:t></a:r></a:p></c:rich></c:tx><c:overlay val=\"0\"/></c:title><c:autoTitleDeleted val=\"0\"/>",
-            escape(&chart.title)
-        )
+        format!("{}<c:autoTitleDeleted val=\"0\"/>", text_title(&chart.title, 1200, true))
     };
-    let legend = if data.series.len() > 1 || chart.kind == ChartKind::Pie {
-        format!("<c:legend><c:legendPos val=\"b\"/><c:overlay val=\"0\"/>{text_style}</c:legend>")
-    } else {
-        String::new()
+    let legend_position = match opts.legend {
+        LegendPos::None => None,
+        LegendPos::Auto => (count > 1 || matches!(kind, ChartKind::Pie | ChartKind::Donut)).then_some("b"),
+        LegendPos::Bottom => Some("b"),
+        LegendPos::Right => Some("r"),
+        LegendPos::Top => Some("t"),
+        LegendPos::Left => Some("l"),
     };
+    let legend = legend_position
+        .map(|pos| format!("<c:legend><c:legendPos val=\"{pos}\"/><c:overlay val=\"0\"/>{TEXT_STYLE}</c:legend>"))
+        .unwrap_or_default();
     format!(
         "{XML_DECLARATION}\n<c:chartSpace xmlns:c=\"{NS_CHART}\" xmlns:a=\"{NS_DRAWING}\" xmlns:r=\"{NS_REL}\"><c:roundedCorners val=\"0\"/><c:chart>{title}<c:plotArea><c:layout/>{plot}{axes}</c:plotArea>{legend}<c:plotVisOnly val=\"1\"/><c:dispBlanksAs val=\"gap\"/></c:chart></c:chartSpace>"
     )
@@ -608,26 +943,77 @@ fn read_inner(xlsx: &[u8], sheet_names: &[String]) -> Option<Vec<Chart>> {
     Some(charts)
 }
 
+fn title_text(node: Option<&Node>) -> String {
+    let Some(title) = node.and_then(|n| n.child("title")) else { return String::new() };
+    let mut texts = Vec::new();
+    title.all("t", &mut texts);
+    texts.iter().map(|t| t.text.as_str()).collect()
+}
+
+fn flag(node: &Node, name: &str) -> bool {
+    node.child(name).is_some_and(|n| n.attr("val").is_none_or(|v| v == "1" || v == "true"))
+}
+
+fn number_child(node: &Node, name: &str) -> Option<f64> {
+    node.child(name)?.attr("val")?.parse().ok()
+}
+
+/// A cor `RRGGBB` de uma série: a do preenchimento, da linha ou, na dispersão, do marcador.
+fn series_color(ser: &Node) -> Option<String> {
+    let from =
+        |node: Option<&Node>| node.and_then(|n| n.first("srgbClr")).and_then(|c| c.attr("val")).map(str::to_string);
+    from(ser.child("spPr")).or_else(|| from(ser.child("marker").and_then(|m| m.child("spPr"))))
+}
+
+fn read_trend(ser: &Node) -> Option<Trend> {
+    let line = ser.child("trendline")?;
+    let kind = match line.child("trendlineType")?.attr("val")? {
+        "linear" => TrendKind::Linear,
+        "poly" => TrendKind::Poly,
+        "exp" => TrendKind::Exp,
+        "log" => TrendKind::Log,
+        "movingAvg" => TrendKind::Moving,
+        _ => return None,
+    };
+    Some(
+        Trend {
+            kind,
+            order: number_child(line, "order").map_or(2, |v| v as u32),
+            period: number_child(line, "period").map_or(2, |v| v as u32),
+            equation: flag(line, "dispEq"),
+            r2: flag(line, "dispRSqr"),
+        }
+        .sanitized(),
+    )
+}
+
 /// Um gráfico a partir do XML do gráfico e da âncora no desenho.
 fn read_chart(chart_xml: &Node, anchor: &Node, sheet_name: &str) -> Option<Chart> {
     let plot = chart_xml.first("plotArea")?;
-    let kind = if plot.first("pieChart").is_some() {
-        ChartKind::Pie
-    } else if plot.first("lineChart").is_some() {
-        ChartKind::Line
-    } else {
-        let bars = plot.first("barChart")?;
-        if bars.child("barDir").and_then(|d| d.attr("val")) == Some("bar") { ChartKind::Bar } else { ChartKind::Column }
+    let groups: Vec<&Node> = plot.children.iter().filter(|n| n.name.ends_with("Chart")).collect();
+    let has = |name: &str| groups.iter().copied().find(|g| g.name == name);
+    // O grupo que dá o tipo: pizza, rosca, dispersão, barras, área ou linha, nessa ordem.
+    let base = has("pieChart")
+        .or_else(|| has("doughnutChart"))
+        .or_else(|| has("scatterChart"))
+        .or_else(|| has("barChart"))
+        .or_else(|| has("areaChart"))
+        .or_else(|| has("lineChart"))?;
+    let kind = match base.name.as_str() {
+        "pieChart" => ChartKind::Pie,
+        "doughnutChart" => ChartKind::Donut,
+        "scatterChart" => ChartKind::Scatter,
+        "areaChart" => ChartKind::Area,
+        "lineChart" => ChartKind::Line,
+        _ => {
+            if base.child("barDir").and_then(|d| d.attr("val")) == Some("bar") {
+                ChartKind::Bar
+            } else {
+                ChartKind::Column
+            }
+        }
     };
-    let title = chart_xml
-        .child("chart")
-        .and_then(|c| c.child("title"))
-        .map(|title| {
-            let mut texts = Vec::new();
-            title.all("t", &mut texts);
-            texts.iter().map(|t| t.text.as_str()).collect::<String>()
-        })
-        .unwrap_or_default();
+    let title = title_text(chart_xml.child("chart"));
 
     // Os dados: a menor área que cobre todas as referências à planilha do gráfico.
     let mut formulas = Vec::new();
@@ -667,7 +1053,98 @@ fn read_chart(chart_xml: &Node, anchor: &Node, sheet_name: &str) -> Option<Chart
             (from_col + (size("cx")? / 9525 / 90).max(1) - 1, from_row + (size("cy")? / 9525 / 20).max(1) - 1)
         }
     };
-    Some(Chart { id: 0, sheet: 0, kind, title, range, from_col, from_row, to_col, to_row })
+
+    // Opções: empilhamento, séries (cor, linha, eixo secundário, tendência), rótulos e eixos.
+    let mut opts = ChartOptions::default();
+    opts.stacking = match base.child("grouping").and_then(|g| g.attr("val")) {
+        Some("stacked") => Stacking::Stacked,
+        Some("percentStacked") => Stacking::Percent,
+        _ => Stacking::None,
+    };
+    let axis_ids = |group: &Node| -> Vec<String> {
+        group.children.iter().filter(|n| n.name == "axId").filter_map(|n| n.attr("val")).map(str::to_string).collect()
+    };
+    let primary_axes = axis_ids(base);
+    let combinable = matches!(kind, ChartKind::Column | ChartKind::Line | ChartKind::Area);
+    for group in &groups {
+        let mut sers = Vec::new();
+        group.all("ser", &mut sers);
+        let line_overlay = group.name == "lineChart" && kind == ChartKind::Column;
+        let secondary = combinable && axis_ids(group) != primary_axes;
+        for (position, ser) in sers.iter().enumerate() {
+            let index =
+                number_child(ser, "order").or_else(|| number_child(ser, "idx")).map_or(position, |v| v as usize);
+            if index >= MAX_CHART_COLS as usize {
+                continue;
+            }
+            if opts.styles.len() <= index {
+                opts.styles.resize(index + 1, SeriesStyle::default());
+            }
+            let style = &mut opts.styles[index];
+            style.color = series_color(ser)
+                .filter(|c| !c.eq_ignore_ascii_case(PALETTE[index % PALETTE.len()]))
+                .map(|c| format!("#{}", c.to_ascii_uppercase()));
+            style.line = line_overlay;
+            style.secondary = secondary;
+            style.trend = read_trend(ser);
+            if let Some(dlbls) = ser.child("dLbls") {
+                opts.labels |= flag(dlbls, "showVal") || flag(dlbls, "showPercent");
+            }
+            if matches!(group.name.as_str(), "lineChart" | "scatterChart") {
+                opts.smooth |= flag(ser, "smooth");
+            }
+        }
+    }
+    // Estilos que não mudam nada não precisam ficar.
+    while opts.styles.last().is_some_and(|s| *s == SeriesStyle::default()) {
+        opts.styles.pop();
+    }
+
+    let series_count = {
+        let mut all = Vec::new();
+        plot.all("ser", &mut all);
+        all.len()
+    };
+    let pie = matches!(kind, ChartKind::Pie | ChartKind::Donut);
+    opts.legend = match chart_xml.first("legend") {
+        None => {
+            if series_count > 1 || pie {
+                LegendPos::None
+            } else {
+                LegendPos::Auto
+            }
+        }
+        Some(legend) => match legend.child("legendPos").and_then(|p| p.attr("val")) {
+            Some("r") => LegendPos::Right,
+            Some("t") => LegendPos::Top,
+            Some("l") => LegendPos::Left,
+            _ if series_count > 1 || pie => LegendPos::Auto,
+            _ => LegendPos::Bottom,
+        },
+    };
+
+    // Eixos: o de valores é o que a família principal aponta em segundo lugar.
+    if !pie {
+        let value_axes: Vec<&Node> = plot.children.iter().filter(|n| n.name == "valAx").collect();
+        let category_axes: Vec<&Node> = plot.children.iter().filter(|n| n.name == "catAx").collect();
+        let id_of = |n: &Node| n.child("axId").and_then(|a| a.attr("val")).unwrap_or_default().to_string();
+        let value_axis = value_axes.iter().copied().find(|n| Some(&id_of(n)) == primary_axes.get(1));
+        let x_axis = if kind == ChartKind::Scatter {
+            value_axes.iter().copied().find(|n| Some(&id_of(n)) == primary_axes.first())
+        } else {
+            category_axes.iter().copied().find(|n| Some(&id_of(n)) == primary_axes.first())
+        };
+        opts.x_title = title_text(x_axis);
+        opts.y_title = title_text(value_axis);
+        if let Some(axis) = value_axis {
+            opts.grid = axis.child("majorGridlines").is_some();
+            if let Some(scaling) = axis.child("scaling") {
+                opts.y_min = number_child(scaling, "min");
+                opts.y_max = number_child(scaling, "max");
+            }
+        }
+    }
+    Some(Chart { id: 0, sheet: 0, kind, title, range, from_col, from_row, to_col, to_row, opts })
 }
 
 #[cfg(test)]

@@ -1,6 +1,7 @@
 //! Casca desktop do Abacus: guarda a pasta de trabalho aberta e expõe o
 //! motor de planilhas para a interface por meio de comandos do Tauri.
 
+mod chart_trend;
 mod charts;
 mod conditional;
 mod engine;

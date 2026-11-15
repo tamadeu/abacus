@@ -483,7 +483,7 @@ impl Engine {
 
     /// O que o gráfico mostra, lido das células.
     fn data_of(&self, chart: &Chart) -> ChartData {
-        charts::build_data(chart.range, |row, col| {
+        charts::data_for(chart, |row, col| {
             let Ok((row, col)) = to_ironcalc(col, row) else {
                 return CellInfo { text: String::new(), number: None };
             };
@@ -542,6 +542,7 @@ impl Engine {
             from_row: range.row,
             to_col: from_col + 7,
             to_row: (range.row + 14).min(MAX_ROWS as u32 - 1),
+            opts: Default::default(),
         };
         self.check_chart(&chart)?;
         // Como no Excel, uma série só dá o título ao gráfico.
@@ -554,7 +555,8 @@ impl Engine {
     }
 
     /// Troca um gráfico (tipo, título, dados ou posição) pelo seu novo estado.
-    pub fn update_chart(&mut self, chart: Chart) -> Result<ChartView, String> {
+    pub fn update_chart(&mut self, mut chart: Chart) -> Result<ChartView, String> {
+        chart.normalize();
         self.check_chart(&chart)?;
         let slot = self.charts.iter_mut().find(|c| c.id == chart.id).ok_or("o gráfico não existe mais")?;
         *slot = chart.clone();
@@ -2445,6 +2447,7 @@ mod tests {
             from_row: 0,
             to_col: 8,
             to_row: 9,
+            opts: Default::default(),
         });
         assert_eq!(data.categories, ["Jan", "Fev"]);
         assert_eq!(data.series.len(), 2);
@@ -2464,6 +2467,7 @@ mod tests {
             from_row: 0,
             to_col: 8,
             to_row: 9,
+            opts: Default::default(),
         });
         assert_eq!(data.categories, ["1", "2"]);
         assert_eq!(data.series.iter().map(|s| s.name.as_str()).collect::<Vec<_>>(), ["Série 1", "Série 2"]);
@@ -2549,6 +2553,90 @@ mod tests {
             assert_eq!(engine.charts(second)[0].chart.range, Range { col: 0, row: 0, cols: 1, rows: 2 });
             assert_eq!(engine.charts(0)[0].data.series.len(), 2);
         }
+    }
+
+    #[test]
+    fn chart_options_survive_xlsx() {
+        use crate::chart_trend::{Trend, TrendKind};
+        use crate::charts::{ChartOptions, LegendPos, SeriesStyle, Stacking};
+        let mut e = engine(&[
+            (0, 0, "Mês"),
+            (1, 0, "Vendas"),
+            (2, 0, "Margem"),
+            (3, 0, "Custos"),
+            (0, 1, "Jan"),
+            (1, 1, "10"),
+            (2, 1, "0,2"),
+            (3, 1, "4"),
+            (0, 2, "Fev"),
+            (1, 2, "20"),
+            (2, 2, "0,3"),
+            (3, 2, "6"),
+            (0, 3, "Mar"),
+            (1, 3, "15"),
+            (2, 3, "0,25"),
+            (3, 3, "9"),
+        ]);
+        let range = Range { col: 0, row: 0, cols: 4, rows: 4 };
+        let trend = |kind| Some(Trend { kind, order: 3, period: 2, equation: true, r2: true });
+        let combo = ChartOptions {
+            labels: true,
+            x_title: "Meses".into(),
+            y_title: "Reais".into(),
+            y_min: Some(0.0),
+            y_max: Some(40.0),
+            grid: false,
+            smooth: true,
+            legend: LegendPos::Right,
+            styles: vec![
+                SeriesStyle { color: Some("#112233".into()), trend: trend(TrendKind::Poly), ..Default::default() },
+                SeriesStyle { line: true, secondary: true, ..Default::default() },
+                SeriesStyle { trend: trend(TrendKind::Moving), ..Default::default() },
+            ],
+            ..Default::default()
+        };
+        let variants = [
+            (ChartKind::Column, combo),
+            (ChartKind::Area, ChartOptions { stacking: Stacking::Percent, ..Default::default() }),
+            (
+                ChartKind::Bar,
+                ChartOptions { stacking: Stacking::Stacked, legend: LegendPos::Top, ..Default::default() },
+            ),
+            (
+                ChartKind::Line,
+                ChartOptions {
+                    styles: vec![SeriesStyle {
+                        secondary: true,
+                        trend: trend(TrendKind::Linear),
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                },
+            ),
+            (ChartKind::Scatter, ChartOptions { x_title: "X".into(), ..Default::default() }),
+            (ChartKind::Donut, ChartOptions { labels: true, legend: LegendPos::Left, ..Default::default() }),
+        ];
+        for (slot, (kind, opts)) in variants.into_iter().enumerate() {
+            let mut chart = e.add_chart(0, kind, range).unwrap().chart;
+            chart.opts = opts;
+            // Um embaixo do outro, para poder ver cada um.
+            chart.from_row = slot as u32 * 16;
+            chart.to_row = chart.from_row + 14;
+            e.update_chart(chart).unwrap();
+        }
+        let path = temp_xlsx("chart-options");
+        e.save(&path).unwrap();
+        if let Ok(copy) = std::env::var("ABACUS_KEEP_XLSX") {
+            fs::copy(&path, copy).unwrap();
+        }
+        let back = Engine::open(&path).unwrap();
+        fs::remove_file(&path).unwrap();
+        let strip = |engine: &Engine| -> Vec<_> {
+            engine.charts(0).into_iter().map(|v| (v.chart.kind, v.chart.range, v.chart.opts)).collect()
+        };
+        assert_eq!(strip(&back), strip(&e));
+        // Os dados da dispersão usam a coluna de meses como X só se for número; aqui são textos.
+        assert_eq!(back.charts(0).len(), 6);
     }
 
     #[test]
