@@ -136,7 +136,9 @@ Limitações conhecidas:
   recolher grupos, nem detalhar uma célula.
 - Gráficos: ficam presos a células, então não acompanham linhas e colunas
   inseridas ou excluídas; criar, alterar e apagar um gráfico entram no
-  desfazer. Os tipos que o Abacus não conhece (bolhas, radar, 3D…) somem ao
+  desfazer. Com a célula ativa numa tabela dinâmica, inserir um gráfico cria um
+  gráfico ligado a ela (sem os totais), que se atualiza com a tabela; mudar os
+  dados à mão o solta, e o vínculo não é guardado no `.xlsx`. Os tipos que o Abacus não conhece (bolhas, radar, 3D…) somem ao
   salvar. O eixo secundário e o combinado valem para colunas, linhas e área;
   na pizza só a primeira série aparece, e a rosca mostra um anel por série.
   Passe o caminho de um `.xlsx` ou `.csv` na linha de comando para abri-lo

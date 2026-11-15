@@ -2034,15 +2034,19 @@ async function insertChart(kind: ChartKind) {
   if (!(await write())) return;
   try {
     let range = selectedRange();
-    if (range.cols === 1 && range.rows === 1) range = await engine.dataRegion(sheet, range.col, range.row);
-    if (range.cols * range.rows < 2) {
+    // Numa tabela dinâmica, o gráfico acompanha a tabela.
+    const inPivot = range.cols === 1 && range.rows === 1 ? pivotPanel.at(range.col, range.row) : undefined;
+    if (!inPivot && range.cols === 1 && range.rows === 1) range = await engine.dataRegion(sheet, range.col, range.row);
+    if (!inPivot && range.cols * range.rows < 2) {
       statusEl.textContent = "Selecione as células com os dados do gráfico";
       return;
     }
-    const created = await engine.addChart(sheet, kind, range);
+    const created = inPivot ? await engine.addPivotChart(inPivot.id, kind) : await engine.addChart(sheet, kind, range);
     selectedChart = created.id;
     markModified();
-    statusEl.textContent = "Gráfico inserido: arraste para mover; dois cliques abrem as opções";
+    statusEl.textContent = inPivot
+      ? "Gráfico da tabela dinâmica inserido: ele se atualiza com a tabela"
+      : "Gráfico inserido: arraste para mover; dois cliques abrem as opções";
   } catch (error) {
     statusEl.textContent = `Erro ao inserir o gráfico: ${error}`;
   }

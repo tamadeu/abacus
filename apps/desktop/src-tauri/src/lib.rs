@@ -415,6 +415,11 @@ fn list_charts(state: State<'_, AppState>, sheet: u32) -> Result<Vec<ChartView>,
 
 /// Cria um gráfico com os dados do intervalo.
 #[tauri::command]
+fn add_pivot_chart(state: State<'_, AppState>, id: u32, kind: ChartKind) -> Result<ChartView, String> {
+    state.with(|engine| engine.add_pivot_chart(id, kind))
+}
+
+#[tauri::command]
 fn add_chart(state: State<'_, AppState>, sheet: u32, kind: ChartKind, range: Range) -> Result<ChartView, String> {
     state.with(|engine| engine.add_chart(sheet, kind, range))
 }
@@ -512,6 +517,7 @@ pub fn run() {
             data_region,
             list_charts,
             add_chart,
+            add_pivot_chart,
             update_chart,
             delete_chart,
             set_frozen,

@@ -684,6 +684,11 @@ export function setupPivotPanel(deps: Deps) {
       }
     },
 
+    /** A tabela que cobre a célula, se houver. */
+    at(col: number, row: number): Pivot | undefined {
+      return known.find((item) => contains(item, col, row));
+    },
+
     /** Abre o painel quando a célula ativa está numa tabela, e o esconde ao sair dela. */
     sync(col: number, row: number) {
       const found = known.find((item) => contains(item, col, row));

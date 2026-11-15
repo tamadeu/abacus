@@ -102,6 +102,9 @@ pub struct ChartOptions {
     /// Linhas suavizadas.
     pub smooth: bool,
     pub styles: Vec<SeriesStyle>,
+    /// Tabela dinâmica que alimenta o gráfico: o intervalo acompanha a tabela.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pivot: Option<u32>,
 }
 
 impl Default for ChartOptions {
@@ -117,6 +120,7 @@ impl Default for ChartOptions {
             grid: true,
             smooth: false,
             styles: Vec::new(),
+            pivot: None,
         }
     }
 }

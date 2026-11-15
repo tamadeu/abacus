@@ -488,7 +488,7 @@ impl Engine {
     }
 
     /// O que o gráfico mostra, lido das células.
-    fn data_of(&self, chart: &Chart) -> ChartData {
+    pub(crate) fn data_of(&self, chart: &Chart) -> ChartData {
         charts::data_for(chart, |row, col| {
             let Ok((row, col)) = to_ironcalc(col, row) else {
                 return CellInfo { text: String::new(), number: None };
@@ -566,8 +566,12 @@ impl Engine {
     pub fn update_chart(&mut self, mut chart: Chart) -> Result<ChartView, String> {
         chart.normalize();
         self.check_chart(&chart)?;
-        if !self.charts.iter().any(|c| c.id == chart.id) {
+        let Some(old) = self.charts.iter().find(|c| c.id == chart.id) else {
             return Err("o gráfico não existe mais".into());
+        };
+        // Trocar os dados à mão solta o gráfico da tabela dinâmica.
+        if old.range != chart.range {
+            chart.opts.pivot = None;
         }
         self.open_undo_step()?;
         if let Some(slot) = self.charts.iter_mut().find(|c| c.id == chart.id) {
@@ -575,6 +579,16 @@ impl Engine {
         }
         self.note_state();
         Ok(ChartView { data: self.data_of(&chart), chart })
+    }
+
+    /// Regrava o gráfico sem abrir outro passo no desfazer.
+    pub(crate) fn update_chart_raw(&mut self, chart: &Chart) -> Result<(), String> {
+        self.check_chart(chart)?;
+        if let Some(slot) = self.charts.iter_mut().find(|c| c.id == chart.id) {
+            *slot = chart.clone();
+        }
+        self.note_state();
+        Ok(())
     }
 
     /// Apaga um gráfico.
@@ -1309,8 +1323,8 @@ impl Engine {
 }
 
 /// Colunas e linhas de uma planilha, iguais às do Excel.
-const MAX_COLS: i32 = 16_384;
-const MAX_ROWS: i32 = 1_048_576;
+pub(crate) const MAX_COLS: i32 = 16_384;
+pub(crate) const MAX_ROWS: i32 = 1_048_576;
 
 /// Tamanhos de colunas (ou linhas) a partir de `first`, até cobrir `extent`
 /// pixels, chegar ao fim da planilha ou atingir `limit` itens.
@@ -2980,6 +2994,7 @@ mod tests {
             repeat_labels: false,
             width: 0,
             height: 0,
+            chart_area: None,
         }
     }
 
@@ -3122,6 +3137,35 @@ mod tests {
         e.undo().unwrap();
         assert_eq!(e.model.undo_depth(), before);
         assert_eq!(e.model.get_column_width(0, 1).unwrap(), width);
+    }
+
+    #[test]
+    fn chart_follows_its_pivot_table() {
+        let mut e = sales();
+        let pivot = e.add_pivot(pv(&["Região"], &[])).unwrap();
+        let view = e.add_pivot_chart(pivot.id, ChartKind::Column).unwrap();
+        assert_eq!(view.chart.opts.pivot, Some(pivot.id));
+        let first = view.chart.range;
+        // O gráfico não inclui a linha de total.
+        assert_eq!(first.rows, pivot.chart_area.unwrap().rows);
+        assert!(first.rows < pivot.height);
+        assert_eq!(view.data.series.len(), 1);
+
+        let mut wider = pivot.clone();
+        wider.cols = pv(&[], &["Produto"]).cols;
+        e.update_pivot(wider).unwrap();
+        let after = &e.charts(0)[0];
+        assert!(after.chart.range.cols > first.cols);
+        assert_eq!(after.chart.opts.pivot, Some(pivot.id));
+
+        e.undo().unwrap();
+        assert_eq!(e.charts(0)[0].chart.range, first);
+
+        // Mudar os dados à mão solta o gráfico da tabela.
+        let mut manual = e.charts(0)[0].chart.clone();
+        manual.range.rows -= 1;
+        e.update_chart(manual).unwrap();
+        assert_eq!(e.charts(0)[0].chart.opts.pivot, None);
     }
 
     #[test]

@@ -3,7 +3,8 @@
 
 use ironcalc::base::cell::CellValue;
 
-use crate::engine::{Engine, Range, Snapshot, StyleProperty, area, to_ironcalc};
+use crate::charts::ChartKind;
+use crate::engine::{ChartView, Engine, MAX_COLS, MAX_ROWS, Range, Snapshot, StyleProperty, area, to_ironcalc};
 use crate::package;
 use crate::pivot::{self, Field, Grid, Out, Pivot, Role, Source, SrcCell};
 use crate::validation::parse_range_text;
@@ -31,6 +32,21 @@ fn input_number(n: f64) -> String {
 fn tsv_field(text: &str) -> String {
     let text = if text.starts_with('=') { format!(" {text}") } else { text.to_string() };
     if text.contains(['\t', '"', '\n', '\r']) { format!("\"{}\"", text.replace('"', "\"\"")) } else { text }
+}
+
+/// A parte da grade que vira gráfico: do último título de coluna e da última
+/// coluna de rótulos até antes dos subtotais e totais.
+fn chart_area(at: Range, grid: &Grid) -> Option<Range> {
+    let head = grid.page_rows + grid.header_rows.checked_sub(1)?;
+    let first_col = grid.label_cols.checked_sub(1)?;
+    let rows = grid.row_roles.iter().skip(head + 1).take_while(|r| **r == Role::Body).count();
+    let cols = grid.col_roles.iter().skip(grid.label_cols).take_while(|r| **r == Role::Body).count();
+    (rows > 0 && cols > 0).then_some(Range {
+        col: at.col + first_col as u32,
+        row: at.row + head as u32,
+        cols: cols as u32 + 1,
+        rows: rows as u32 + 1,
+    })
 }
 
 fn grid_text(grid: &Grid) -> String {
@@ -184,6 +200,7 @@ impl Engine {
         self.style_pivot(pivot.sheet, at, &grid)?;
         pivot.width = width as u32;
         pivot.height = height as u32;
+        pivot.chart_area = chart_area(at, &grid);
         // Deixa a seleção na tabela.
         let (r, c) = to_ironcalc(at.col, at.row)?;
         self.select(pivot.sheet, r, c, r, c)?;
@@ -266,11 +283,36 @@ impl Engine {
         Ok(())
     }
 
+    /// Gráfico com os dados da tabela (sem totais), que se atualiza com ela.
+    pub fn add_pivot_chart(&mut self, id: u32, kind: ChartKind) -> Result<ChartView, String> {
+        let pivot = self.pivots.iter().find(|p| p.id == id).ok_or("a tabela dinâmica não existe mais")?.clone();
+        let range = pivot.chart_area.ok_or("a tabela não tem dados para um gráfico")?;
+        let mut view = self.add_chart(pivot.sheet, kind, range)?;
+        view.chart.opts.pivot = Some(id);
+        // A posição fica ao lado da tabela inteira, não só dos dados.
+        let from_col = (pivot.col + pivot.width + 1).min(MAX_COLS as u32 - 8);
+        view.chart.from_col = from_col;
+        view.chart.to_col = from_col + 7;
+        view.chart.from_row = pivot.row;
+        view.chart.to_row = (pivot.row + 14).min(MAX_ROWS as u32 - 1);
+        self.update_chart_raw(&view.chart)?;
+        Ok(ChartView { data: self.data_of(&view.chart), chart: view.chart })
+    }
+
+    /// Os gráficos ligados à tabela passam a usar a grade nova.
+    fn sync_pivot_charts(&mut self, pivot: &Pivot) {
+        let Some(range) = pivot.chart_area else { return };
+        for chart in self.charts.iter_mut().filter(|c| c.opts.pivot == Some(pivot.id)) {
+            chart.range = range;
+        }
+    }
+
     pub fn add_pivot(&mut self, pivot: Pivot) -> Result<Pivot, String> {
         let mut pivot = Pivot { id: 0, width: 0, height: 0, ..pivot };
         pivot.id = self.pivots.iter().map(|p| p.id).max().unwrap_or(0) + 1;
         let done = self.render_pivot(pivot, true)?;
         self.pivots.push(done.clone());
+        self.sync_pivot_charts(&done);
         self.note_state();
         Ok(done)
     }
@@ -282,6 +324,7 @@ impl Engine {
         let done = self.render_pivot(pivot, false)?;
         let slot = self.pivots.iter_mut().find(|p| p.id == done.id).ok_or("a tabela dinâmica não existe mais")?;
         *slot = done.clone();
+        self.sync_pivot_charts(&done);
         self.note_state();
         Ok(done)
     }
@@ -322,6 +365,9 @@ impl Engine {
     pub fn delete_pivot(&mut self, id: u32, clear: bool) -> Result<(), String> {
         let at = self.pivots.iter().position(|p| p.id == id).ok_or("a tabela dinâmica não existe mais")?;
         let pivot = self.pivots.remove(at);
+        for chart in self.charts.iter_mut().filter(|c| c.opts.pivot == Some(id)) {
+            chart.opts.pivot = None;
+        }
         if clear && let Some(extent) = Self::pivot_extent(&pivot) {
             self.model.range_clear_all(&area(pivot.sheet, extent)?)?;
         }

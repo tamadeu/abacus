@@ -157,6 +157,8 @@ export interface Pivot {
   /** Tamanho da grade escrita; o motor preenche. */
   width: number;
   height: number;
+  /** Parte da grade que um gráfico usa (sem totais); o motor preenche. */
+  chartArea?: Range;
 }
 
 /** Uma regra de validação de dados. */
@@ -264,6 +266,8 @@ export interface ChartInfo {
   grid: boolean;
   smooth: boolean;
   styles: SeriesStyle[];
+  /** Tabela dinâmica que alimenta o gráfico. */
+  pivot?: number;
   data: ChartData;
 }
 
@@ -480,6 +484,8 @@ export interface Engine {
   charts(sheet: number): Promise<ChartInfo[]>;
   /** Cria um gráfico com os dados do intervalo, ao lado dele. */
   addChart(sheet: number, kind: ChartKind, range: Range): Promise<ChartInfo>;
+  /** Gráfico com os dados de uma tabela dinâmica, que o acompanha. */
+  addPivotChart(id: number, kind: ChartKind): Promise<ChartInfo>;
   /** Grava o novo estado de um gráfico (tipo, título, dados ou posição). */
   updateChart(chart: ChartInfo): Promise<ChartInfo>;
   deleteChart(id: number): Promise<void>;
@@ -737,6 +743,10 @@ class TauriEngine implements Engine {
 
   addChart(sheet: number, kind: ChartKind, range: Range): Promise<ChartInfo> {
     return invoke("add_chart", { sheet, kind, range });
+  }
+
+  addPivotChart(id: number, kind: ChartKind): Promise<ChartInfo> {
+    return invoke("add_pivot_chart", { id, kind });
   }
 
   updateChart(chart: ChartInfo): Promise<ChartInfo> {
@@ -1047,6 +1057,10 @@ class PreviewEngine implements Engine {
   }
 
   async addChart(): Promise<ChartInfo> {
+    throw new Error("a pré-visualização não tem gráficos");
+  }
+
+  async addPivotChart(): Promise<ChartInfo> {
     throw new Error("a pré-visualização não tem gráficos");
   }
 

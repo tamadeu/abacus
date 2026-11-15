@@ -176,6 +176,9 @@ pub struct Pivot {
     pub width: u32,
     #[serde(default)]
     pub height: u32,
+    /// Parte da grade que um gráfico usa: títulos e itens, sem totais.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chart_area: Option<crate::engine::Range>,
 }
 
 /// Uma célula lida da origem.
@@ -996,6 +999,7 @@ mod tests {
             repeat_labels: false,
             width: 0,
             height: 0,
+            chart_area: None,
         }
     }
 
