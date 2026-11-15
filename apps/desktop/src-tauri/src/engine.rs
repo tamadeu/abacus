@@ -318,6 +318,8 @@ pub struct Engine {
     charts: Vec<Chart>,
     /// Regras de validação de dados; o motor não as conhece.
     pub(crate) validations: Vec<crate::validation::Validation>,
+    /// Tabelas dinâmicas; o motor não as conhece.
+    pub(crate) pivots: Vec<crate::pivot::Pivot>,
 }
 
 /// Um gráfico com os dados que ele mostra agora.
@@ -332,7 +334,7 @@ impl Engine {
     /// Pasta nova, com uma planilha vazia.
     pub fn new() -> Result<Self, String> {
         let model = UserModel::new_empty("Pasta1", LOCALE, TIMEZONE, LANGUAGE)?;
-        Ok(Self { model, copied: None, charts: Vec::new(), validations: Vec::new() })
+        Ok(Self { model, copied: None, charts: Vec::new(), validations: Vec::new(), pivots: Vec::new() })
     }
 
     /// Abre um arquivo `.xlsx`.
@@ -341,10 +343,11 @@ impl Engine {
         let model = load_from_xlsx(file_name, LOCALE, TIMEZONE, LANGUAGE).map_err(|e| e.to_string())?;
         let mut model = UserModel::from_model(model);
         model.evaluate();
-        let mut engine = Self { model, copied: None, charts: Vec::new(), validations: Vec::new() };
+        let mut engine = Self { model, copied: None, charts: Vec::new(), validations: Vec::new(), pivots: Vec::new() };
         if let Ok(bytes) = fs::read(path) {
             engine.charts = charts::read_from(&bytes, &engine.sheet_names());
             engine.validations = crate::validation::read_from(&bytes, &engine.sheet_names());
+            engine.pivots = crate::pivot_sheet::read_from(&bytes);
         }
         Ok(engine)
     }
@@ -392,6 +395,7 @@ impl Engine {
         let with_data: Vec<(Chart, ChartData)> =
             self.charts.iter().map(|chart| (chart.clone(), self.data_of(chart))).collect();
         let buffer = crate::validation::write_into(buffer, &self.sheet_names(), &self.validations)?;
+        let buffer = crate::pivot_sheet::write_into(buffer, &self.pivots)?;
         let buffer = charts::write_into(buffer, &self.sheet_names(), &with_data)?;
         // Grava num arquivo temporário e troca no fim, para uma falha no meio
         // do caminho não estragar o arquivo que já existia.
@@ -442,6 +446,7 @@ impl Engine {
         self.model.delete_sheet(sheet)?;
         // Os gráficos da planilha somem com ela; os das seguintes sobem um índice.
         self.drop_validations_of(sheet);
+        self.drop_pivots_of(sheet);
         self.charts.retain(|chart| chart.sheet != sheet);
         for chart in &mut self.charts {
             if chart.sheet > sheet {
@@ -452,7 +457,7 @@ impl Engine {
     }
 
     /// Nomes de todas as planilhas, inclusive as ocultas, na ordem das abas.
-    fn sheet_names(&self) -> Vec<String> {
+    pub(crate) fn sheet_names(&self) -> Vec<String> {
         self.model.get_worksheets_properties().into_iter().map(|sheet| sheet.name).collect()
     }
 
@@ -1164,7 +1169,14 @@ impl Engine {
     }
 
     /// Seleciona um intervalo no IronCalc, que copia e cola sempre a seleção.
-    fn select(&mut self, sheet: u32, row: i32, col: i32, last_row: i32, last_col: i32) -> Result<(), String> {
+    pub(crate) fn select(
+        &mut self,
+        sheet: u32,
+        row: i32,
+        col: i32,
+        last_row: i32,
+        last_col: i32,
+    ) -> Result<(), String> {
         self.model.set_selected_sheet(sheet)?;
         self.model.set_selected_cell(row, col)?;
         self.model.set_selected_range(row, col, last_row, last_col)
@@ -1459,7 +1471,7 @@ fn check_size(size: f64) -> Result<f64, String> {
 }
 
 /// Converte um retângulo da interface para a área do IronCalc.
-fn area(sheet: u32, range: Range) -> Result<Area, String> {
+pub(crate) fn area(sheet: u32, range: Range) -> Result<Area, String> {
     if range.cols == 0 || range.rows == 0 {
         return Err("o intervalo está vazio".into());
     }
@@ -1476,7 +1488,7 @@ fn to_i32(value: u32) -> Result<i32, String> {
 }
 
 /// Converte coluna e linha a partir de zero para (linha, coluna) a partir de um.
-fn to_ironcalc(col: u32, row: u32) -> Result<(i32, i32), String> {
+pub(crate) fn to_ironcalc(col: u32, row: u32) -> Result<(i32, i32), String> {
     Ok((to_i32(row)?.saturating_add(1), to_i32(col)?.saturating_add(1)))
 }
 
@@ -2717,6 +2729,157 @@ mod tests {
                 .collect::<Vec<_>>()
         };
         assert_eq!(strip(back.validations(0)), strip(e.validations(0)));
+    }
+
+    /// Região, produto e vendas em A1:C6.
+    fn sales() -> Engine {
+        engine(&[
+            (0, 0, "Região"),
+            (1, 0, "Produto"),
+            (2, 0, "Vendas"),
+            (0, 1, "Sul"),
+            (1, 1, "A"),
+            (2, 1, "10"),
+            (0, 2, "Sul"),
+            (1, 2, "B"),
+            (2, 2, "20,5"),
+            (0, 3, "Norte"),
+            (1, 3, "A"),
+            (2, 3, "30"),
+            (0, 4, "Norte"),
+            (1, 4, "A"),
+            (2, 4, "40"),
+            (0, 5, "Norte"),
+            (1, 5, "B"),
+            (2, 5, "50"),
+        ])
+    }
+
+    fn pv(rows: &[&str], cols: &[&str]) -> crate::pivot::Pivot {
+        use crate::pivot::*;
+        let field = |n: &&str| Field {
+            name: n.to_string(),
+            group: Group::None,
+            step: 10.0,
+            sort: SortKind::LabelAsc,
+            sort_value: 0,
+            top: None,
+        };
+        Pivot {
+            id: 0,
+            source_sheet: 0,
+            source: "A1:C6".into(),
+            sheet: 0,
+            col: 5,
+            row: 1,
+            rows: rows.iter().map(field).collect(),
+            cols: cols.iter().map(field).collect(),
+            values: vec![ValueField {
+                field: "Vendas".into(),
+                agg: Agg::Sum,
+                show_as: ShowAs::Normal,
+                title: String::new(),
+                format: String::new(),
+                formula: String::new(),
+            }],
+            filters: vec![],
+            grand_rows: true,
+            grand_cols: true,
+            subtotals: true,
+            repeat_labels: false,
+            width: 0,
+            height: 0,
+        }
+    }
+
+    #[test]
+    fn pivot_writes_the_grid_and_follows_updates() {
+        let mut e = sales();
+        let made = e.add_pivot(pv(&["Região"], &["Produto"])).unwrap();
+        assert_eq!((made.id, made.width, made.height), (1, 4, 5));
+        assert_eq!(shown(&e, 5, 1), "Soma de Vendas");
+        assert_eq!(shown(&e, 5, 3), "Norte");
+        assert_eq!(shown(&e, 6, 3), "70");
+        assert_eq!(shown(&e, 7, 4), "20,5");
+        assert_eq!(shown(&e, 8, 5), "150,5");
+        assert!(cell(&e, 5, 5).unwrap().style.is_some_and(|s| s.bold));
+
+        // Muda os dados e atualiza; a definição muda para uma tabela menor e o resto some.
+        e.set_cell(0, 2, 1, "100").unwrap();
+        let again = e.refresh_pivot(1).unwrap();
+        assert_eq!(again.height, 5);
+        assert_eq!(shown(&e, 6, 4), "100");
+        let mut small = pv(&["Região"], &[]);
+        small.id = 1;
+        let small = e.update_pivot(small).unwrap();
+        assert_eq!((small.width, small.height), (2, 4));
+        assert_eq!(shown(&e, 8, 5), "");
+        assert_eq!(shown(&e, 5, 4), "Total Geral");
+        e.delete_pivot(1, true).unwrap();
+        assert_eq!(shown(&e, 5, 4), "");
+        assert!(e.pivots(0).is_empty());
+    }
+
+    #[test]
+    fn pivot_refuses_overlaps_and_bad_definitions() {
+        let mut e = sales();
+        let mut on_data = pv(&["Região"], &[]);
+        on_data.col = 1;
+        on_data.row = 2;
+        assert!(e.add_pivot(on_data).unwrap_err().contains("origem"));
+        e.set_cell(0, 6, 2, "ocupada").unwrap();
+        let busy = e.add_pivot(pv(&["Região"], &[])).unwrap_err();
+        assert!(busy.contains("G3") && busy.contains("dados"), "{busy}");
+        let mut no_field = pv(&["Nada"], &[]);
+        no_field.col = 10;
+        assert!(e.add_pivot(no_field).is_err());
+        let mut no_values = pv(&["Região"], &[]);
+        no_values.col = 20;
+        no_values.values.clear();
+        no_values.rows.clear();
+        no_values.cols.clear();
+        assert_eq!(e.add_pivot(no_values).unwrap().width, 1);
+        let ok = e.add_pivot(pv(&["Produto"], &[]).clone());
+        assert!(ok.is_err());
+        let mut second = pv(&["Produto"], &[]);
+        second.col = 10;
+        e.add_pivot(second).unwrap();
+        let mut over = pv(&["Região"], &[]);
+        over.col = 10;
+        over.row = 2;
+        assert!(e.add_pivot(over).unwrap_err().contains("outra tabela"));
+        assert_eq!(e.pivot_fields(0, "A1:C6").unwrap(), ["Região", "Produto", "Vendas"]);
+        let items = e.pivot_items(0, "A1:C6", pv(&["Produto"], &[]).rows[0].clone()).unwrap();
+        assert_eq!(items, ["A", "B"]);
+    }
+
+    #[test]
+    fn pivot_definitions_survive_xlsx_and_sheet_deletion() {
+        let mut e = sales();
+        let mut p = pv(&["Região"], &["Produto"]);
+        p.values[0].format = "0.00".into();
+        p.filters = vec![crate::pivot::Filter { field: "Produto".into(), hidden: vec!["B".into()] }];
+        e.add_pivot(p).unwrap();
+        let path = temp_xlsx("dinamica");
+        e.save(&path).unwrap();
+        if let Ok(copy) = std::env::var("ABACUS_KEEP_XLSX") {
+            fs::copy(&path, copy).unwrap();
+        }
+        let back = Engine::open(&path).unwrap();
+        fs::remove_file(&path).unwrap();
+        assert_eq!(back.pivots(0), e.pivots(0));
+        assert_eq!(shown(&back, 5, 3), "Norte");
+
+        let mut e = sales();
+        let sheet = e.add_sheet().unwrap();
+        let mut other = pv(&["Região"], &[]);
+        other.sheet = sheet;
+        other.col = 0;
+        other.row = 0;
+        e.add_pivot(other).unwrap();
+        assert_eq!(e.pivots(sheet).len(), 1);
+        e.delete_sheet(sheet).unwrap();
+        assert!(e.pivots(0).is_empty() && e.pivots(sheet).is_empty());
     }
 
     #[test]

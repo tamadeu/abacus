@@ -68,7 +68,7 @@ fn default_operator() -> ValidationOp {
 }
 
 /// `A1:B5` (ou `A1`) como intervalo a partir de zero.
-fn parse_range_text(text: &str) -> Option<Range> {
+pub(crate) fn parse_range_text(text: &str) -> Option<Range> {
     let text = text.trim();
     let (first, last) = text.split_once(':').unwrap_or((text, text));
     let (c1, r1) = parse_cell(first)?;

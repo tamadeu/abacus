@@ -5,6 +5,8 @@ mod charts;
 mod conditional;
 mod engine;
 mod package;
+mod pivot;
+mod pivot_sheet;
 mod validation;
 
 use std::path::PathBuf;
@@ -16,6 +18,7 @@ use engine::{
     Axis, BorderKind, CellPos, ChartView, Direction, Engine, FillAxis, FilterOptions, Range, SheetInfo, Stats,
     Structure, StyleProperty, View,
 };
+use pivot::Pivot;
 use tauri::{AppHandle, State};
 use tauri_plugin_clipboard_manager::ClipboardExt;
 use validation::Validation;
@@ -335,6 +338,59 @@ fn list_options(state: State<'_, AppState>, sheet: u32, col: u32, row: u32) -> R
     state.with(|engine| engine.list_options(sheet, col, row))
 }
 
+/// Tabelas dinâmicas que aparecem numa planilha.
+#[tauri::command]
+fn list_pivots(state: State<'_, AppState>, sheet: u32) -> Result<Vec<Pivot>, String> {
+    state.with(|engine| Ok(engine.pivots(sheet)))
+}
+
+/// Nomes dos campos de uma origem de dados.
+#[tauri::command]
+fn pivot_fields(state: State<'_, AppState>, sheet: u32, source: String) -> Result<Vec<String>, String> {
+    state.with(|engine| engine.pivot_fields(sheet, &source))
+}
+
+/// Itens de um campo, para escolher o que filtrar.
+#[tauri::command]
+fn pivot_items(
+    state: State<'_, AppState>,
+    sheet: u32,
+    source: String,
+    field: pivot::Field,
+) -> Result<Vec<String>, String> {
+    state.with(|engine| engine.pivot_items(sheet, &source, field))
+}
+
+/// Cria uma tabela dinâmica.
+#[tauri::command]
+fn add_pivot(state: State<'_, AppState>, pivot: Pivot) -> Result<Pivot, String> {
+    state.with(|engine| engine.add_pivot(pivot))
+}
+
+/// Troca a definição de uma tabela dinâmica e a redesenha.
+#[tauri::command]
+fn update_pivot(state: State<'_, AppState>, pivot: Pivot) -> Result<Pivot, String> {
+    state.with(|engine| engine.update_pivot(pivot))
+}
+
+/// Lê a origem de novo e redesenha a tabela dinâmica.
+#[tauri::command]
+fn refresh_pivot(state: State<'_, AppState>, id: u32) -> Result<Pivot, String> {
+    state.with(|engine| engine.refresh_pivot(id))
+}
+
+/// Atualiza todas as tabelas dinâmicas.
+#[tauri::command]
+fn refresh_all_pivots(state: State<'_, AppState>) -> Result<u32, String> {
+    state.with(|engine| engine.refresh_all_pivots())
+}
+
+/// Apaga a definição de uma tabela dinâmica (e a grade, se `clear`).
+#[tauri::command]
+fn delete_pivot(state: State<'_, AppState>, id: u32, clear: bool) -> Result<(), String> {
+    state.with(|engine| engine.delete_pivot(id, clear))
+}
+
 /// O bloco de dados contínuo em volta de uma célula.
 #[tauri::command]
 fn data_region(state: State<'_, AppState>, sheet: u32, col: u32, row: u32) -> Result<Range, String> {
@@ -422,6 +478,14 @@ pub fn run() {
             update_validation,
             delete_validation,
             list_options,
+            list_pivots,
+            pivot_fields,
+            pivot_items,
+            add_pivot,
+            update_pivot,
+            refresh_pivot,
+            refresh_all_pivots,
+            delete_pivot,
             data_region,
             list_charts,
             add_chart,
