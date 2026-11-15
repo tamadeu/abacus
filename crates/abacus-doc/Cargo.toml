@@ -1,0 +1,11 @@
+[package]
+name = "abacus-doc"
+description = "Modelo de documento de texto do Abacus, com leitura e gravação de .docx"
+version.workspace = true
+edition.workspace = true
+repository.workspace = true
+license.workspace = true
+
+[dependencies]
+quick-xml = "0.42"
+zip = { version = "9.0.5", default-features = false, features = ["deflate"] }
