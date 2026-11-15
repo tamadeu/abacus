@@ -373,8 +373,12 @@ export interface FileAccess {
    * ou `null` se a pessoa cancelou.
    */
   save(path: string | null, sheet: number): Promise<string | null>;
-  /** Pergunta onde gravar uma imagem PNG e a grava. Devolve o caminho, ou `null` se cancelou. */
-  saveImage?(png: Uint8Array, name: string): Promise<string | null>;
+  /**
+   * Pergunta onde gravar uma imagem (PNG ou PDF, pela extensão) e a grava com os
+   * bytes que `render` produz para o formato escolhido. Devolve o caminho, ou
+   * `null` se cancelou.
+   */
+  saveImage?(render: (format: "png" | "pdf") => Promise<Uint8Array>, name: string): Promise<string | null>;
 }
 
 /**
@@ -526,11 +530,18 @@ class TauriEngine implements Engine {
       await invoke("save_file", { path: target });
       return target;
     },
-    async saveImage(png, name) {
-      let target = await save({ filters: [{ name: "Imagem PNG", extensions: ["png"] }], defaultPath: `${name}.png` });
+    async saveImage(render, name) {
+      let target = await save({
+        filters: [
+          { name: "Imagem PNG", extensions: ["png"] },
+          { name: "Documento PDF", extensions: ["pdf"] },
+        ],
+        defaultPath: `${name}.png`,
+      });
       if (target === null) return null;
-      if (!target.toLowerCase().endsWith(".png")) target += ".png";
-      await invoke("write_png", { path: target, bytes: Array.from(png) });
+      if (!/\.(png|pdf)$/i.test(target)) target += ".png";
+      const bytes = await render(target.toLowerCase().endsWith(".pdf") ? "pdf" : "png");
+      await invoke("write_image", { path: target, bytes: Array.from(bytes) });
       return target;
     },
   };

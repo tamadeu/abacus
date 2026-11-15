@@ -287,12 +287,15 @@ fn startup_file(state: State<'_, AppState>) -> Option<String> {
     state.startup.lock().ok().and_then(|mut path| path.take())
 }
 
-/// Grava uma imagem PNG (um gráfico exportado).
+/// Grava um gráfico exportado, como imagem PNG ou como PDF.
 #[tauri::command]
-fn write_png(path: String, bytes: Vec<u8>) -> Result<(), String> {
-    const SIGNATURE: [u8; 8] = [0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a];
-    if !path.to_lowercase().ends_with(".png") || !bytes.starts_with(&SIGNATURE) {
-        return Err("só dá para gravar imagens PNG".into());
+fn write_image(path: String, bytes: Vec<u8>) -> Result<(), String> {
+    const PNG: [u8; 8] = [0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a];
+    let lower = path.to_lowercase();
+    let valid = (lower.ends_with(".png") && bytes.starts_with(&PNG))
+        || (lower.ends_with(".pdf") && bytes.starts_with(b"%PDF-"));
+    if !valid {
+        return Err("só dá para gravar imagens PNG ou arquivos PDF".into());
     }
     std::fs::write(&path, bytes).map_err(|e| format!("não foi possível gravar {path}: {e}"))
 }
@@ -526,7 +529,7 @@ pub fn run() {
             delete_pivot,
             data_region,
             list_charts,
-            write_png,
+            write_image,
             add_chart,
             add_pivot_chart,
             update_chart,

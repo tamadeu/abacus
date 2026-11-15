@@ -2067,14 +2067,69 @@ async function exportChartImage(chart: ChartInfo) {
   if (!ctx) return;
   ctx.scale(scale, scale);
   drawChart(ctx, chart, { left: 0, top: 0, width, height }, false);
-  try {
-    const blob = await new Promise<Blob | null>((done) => image.toBlob(done, "image/png"));
+  const blobOf = async (type: string, quality?: number) => {
+    const blob = await new Promise<Blob | null>((done) => image.toBlob(done, type, quality));
     if (!blob) throw new Error("não foi possível gerar a imagem");
-    const path = await save.call(engine.files, new Uint8Array(await blob.arrayBuffer()), chart.title || "Gráfico");
+    return new Uint8Array(await blob.arrayBuffer());
+  };
+  try {
+    const path = await save.call(
+      engine.files,
+      async (format) => (format === "png" ? blobOf("image/png") : pdfWithJpeg(await blobOf("image/jpeg", 0.95), image.width, image.height, width, height)),
+      chart.title || "Gráfico",
+    );
     statusEl.textContent = path ? `Imagem gravada em ${path}` : "Exportação cancelada";
   } catch (error) {
     statusEl.textContent = `Erro ao exportar a imagem: ${error}`;
   }
+}
+
+/** Um PDF de uma página só (do tamanho do gráfico, em pontos) com a imagem JPEG. */
+function pdfWithJpeg(jpeg: Uint8Array, pixelsW: number, pixelsH: number, pointsW: number, pointsH: number): Uint8Array {
+  const text = new TextEncoder();
+  const parts: Uint8Array[] = [];
+  const offsets: number[] = [];
+  let size = 0;
+  const push = (data: Uint8Array | string) => {
+    const bytes = typeof data === "string" ? text.encode(data) : data;
+    parts.push(bytes);
+    size += bytes.length;
+  };
+  const object = (n: number, body: string, stream?: Uint8Array) => {
+    offsets[n] = size;
+    push(`${n} 0 obj\n${body}`);
+    if (stream) {
+      push("\nstream\n");
+      push(stream);
+      push("\nendstream");
+    }
+    push("\nendobj\n");
+  };
+  const content = text.encode(`q ${pointsW} 0 0 ${pointsH} 0 0 cm /Im0 Do Q`);
+  push("%PDF-1.4\n");
+  object(1, "<< /Type /Catalog /Pages 2 0 R >>");
+  object(2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>");
+  object(
+    3,
+    `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${pointsW} ${pointsH}] /Resources << /XObject << /Im0 4 0 R >> >> /Contents 5 0 R >>`,
+  );
+  object(
+    4,
+    `<< /Type /XObject /Subtype /Image /Width ${pixelsW} /Height ${pixelsH} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ${jpeg.length} >>`,
+    jpeg,
+  );
+  object(5, `<< /Length ${content.length} >>`, content);
+  const xref = size;
+  push(`xref\n0 6\n0000000000 65535 f \n`);
+  for (let n = 1; n <= 5; n++) push(`${String(offsets[n]).padStart(10, "0")} 00000 n \n`);
+  push(`trailer\n<< /Size 6 /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`);
+  const out = new Uint8Array(size);
+  let at = 0;
+  for (const part of parts) {
+    out.set(part, at);
+    at += part.length;
+  }
+  return out;
 }
 
 /** Cria um gráfico com a seleção, ou com a tabela em volta da célula ativa. */
