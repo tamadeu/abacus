@@ -271,6 +271,7 @@ impl Engine {
         pivot.id = self.pivots.iter().map(|p| p.id).max().unwrap_or(0) + 1;
         let done = self.render_pivot(pivot, true)?;
         self.pivots.push(done.clone());
+        self.note_pivots();
         Ok(done)
     }
 
@@ -281,6 +282,7 @@ impl Engine {
         let done = self.render_pivot(pivot, false)?;
         let slot = self.pivots.iter_mut().find(|p| p.id == done.id).ok_or("a tabela dinâmica não existe mais")?;
         *slot = done.clone();
+        self.note_pivots();
         Ok(done)
     }
 
@@ -323,21 +325,30 @@ impl Engine {
         if clear && let Some(extent) = Self::pivot_extent(&pivot) {
             self.model.range_clear_all(&area(pivot.sheet, extent)?)?;
         }
+        self.note_pivots();
         Ok(())
     }
 
-    /// Desfazer a criação de uma tabela apaga a grade; a definição some junto.
-    pub(crate) fn forget_vanished_pivots(&mut self) {
-        let gone: Vec<u32> = self
-            .pivots
-            .iter()
-            .filter(|p| {
-                let Ok((r, c)) = to_ironcalc(p.col, p.row) else { return false };
-                p.width > 0 && self.model.get_cell_content(p.sheet, r, c).map(|text| text.is_empty()).unwrap_or(false)
-            })
-            .map(|p| p.id)
-            .collect();
-        self.pivots.retain(|p| !gone.contains(&p.id));
+    /// Guarda as definições deste ponto do desfazer, descartando as de passos já refeitos.
+    pub(crate) fn note_pivots(&mut self) {
+        if self.pivots.is_empty() && self.pivot_snaps.is_empty() {
+            return;
+        }
+        let depth = self.model.undo_depth();
+        self.pivot_snaps.retain(|k, _| *k < depth);
+        if self.pivot_snaps.is_empty() && depth > 0 {
+            // O que havia antes da primeira alteração: nada (ou o que o arquivo trouxe).
+            self.pivot_snaps.insert(0, Vec::new());
+        }
+        self.pivot_snaps.insert(depth, self.pivots.clone());
+    }
+
+    /// Depois de desfazer ou refazer, as definições voltam ao que eram naquele ponto.
+    pub(crate) fn restore_pivots(&mut self) {
+        let depth = self.model.undo_depth();
+        if let Some((_, snap)) = self.pivot_snaps.range(..=depth).next_back() {
+            self.pivots = snap.clone();
+        }
     }
 
     /// Acrescenta ao arquivo as tabelas no formato nativo do Excel.
@@ -379,6 +390,7 @@ impl Engine {
 
     /// Tabelas de uma planilha excluída somem; as das seguintes sobem um índice.
     pub(crate) fn drop_pivots_of(&mut self, sheet: u32) {
+        self.pivot_snaps.clear();
         self.pivots.retain(|p| p.sheet != sheet && p.source_sheet != sheet);
         for p in &mut self.pivots {
             if p.sheet > sheet {

@@ -320,6 +320,8 @@ pub struct Engine {
     pub(crate) validations: Vec<crate::validation::Validation>,
     /// Tabelas dinâmicas; o motor não as conhece.
     pub(crate) pivots: Vec<crate::pivot::Pivot>,
+    /// As tabelas dinâmicas em cada ponto do desfazer (profundidade → definições).
+    pub(crate) pivot_snaps: std::collections::BTreeMap<usize, Vec<crate::pivot::Pivot>>,
 }
 
 /// Um gráfico com os dados que ele mostra agora.
@@ -334,7 +336,14 @@ impl Engine {
     /// Pasta nova, com uma planilha vazia.
     pub fn new() -> Result<Self, String> {
         let model = UserModel::new_empty("Pasta1", LOCALE, TIMEZONE, LANGUAGE)?;
-        Ok(Self { model, copied: None, charts: Vec::new(), validations: Vec::new(), pivots: Vec::new() })
+        Ok(Self {
+            model,
+            copied: None,
+            charts: Vec::new(),
+            validations: Vec::new(),
+            pivots: Vec::new(),
+            pivot_snaps: Default::default(),
+        })
     }
 
     /// Abre um arquivo `.xlsx`.
@@ -343,11 +352,21 @@ impl Engine {
         let model = load_from_xlsx(file_name, LOCALE, TIMEZONE, LANGUAGE).map_err(|e| e.to_string())?;
         let mut model = UserModel::from_model(model);
         model.evaluate();
-        let mut engine = Self { model, copied: None, charts: Vec::new(), validations: Vec::new(), pivots: Vec::new() };
+        let mut engine = Self {
+            model,
+            copied: None,
+            charts: Vec::new(),
+            validations: Vec::new(),
+            pivots: Vec::new(),
+            pivot_snaps: Default::default(),
+        };
         if let Ok(bytes) = fs::read(path) {
             engine.charts = charts::read_from(&bytes, &engine.sheet_names());
             engine.validations = crate::validation::read_from(&bytes, &engine.sheet_names());
             engine.pivots = crate::pivot_sheet::read_from(&bytes);
+            if !engine.pivots.is_empty() {
+                engine.pivot_snaps.insert(0, engine.pivots.clone());
+            }
         }
         Ok(engine)
     }
@@ -574,6 +593,7 @@ impl Engine {
         self.refresh_pivots_fed_by(sheet, col, row);
         // A edição e as tabelas que ela refez voltam juntas no desfazer.
         self.model.group_undo_since(depth);
+        self.note_pivots();
         Ok(())
     }
 
@@ -1250,14 +1270,18 @@ impl Engine {
     pub fn undo(&mut self) -> Result<(), String> {
         if self.model.can_undo() {
             self.model.undo()?;
-            self.forget_vanished_pivots();
+            self.restore_pivots();
         }
         Ok(())
     }
 
     /// Refaz a última edição desfeita, se houver.
     pub fn redo(&mut self) -> Result<(), String> {
-        if self.model.can_redo() { self.model.redo() } else { Ok(()) }
+        if self.model.can_redo() {
+            self.model.redo()?;
+            self.restore_pivots();
+        }
+        Ok(())
     }
 }
 
@@ -2949,6 +2973,20 @@ mod tests {
         e.undo().unwrap();
         assert_eq!(shown(&e, 5, 1), "");
         assert!(e.pivots(0).is_empty());
+        // Refazer traz a definição de volta.
+        e.redo().unwrap();
+        assert_eq!(e.pivots(0).len(), 1);
+        assert_eq!(shown(&e, 5, 1), "Soma de Vendas");
+
+        // Desfazer uma alteração também devolve a definição anterior.
+        let mut changed = e.pivots(0)[0].clone();
+        changed.cols.clear();
+        e.update_pivot(changed).unwrap();
+        assert!(e.pivots(0)[0].cols.is_empty());
+        e.undo().unwrap();
+        assert_eq!(e.pivots(0)[0].cols.len(), 1);
+        e.redo().unwrap();
+        assert!(e.pivots(0)[0].cols.is_empty());
     }
 
     #[test]

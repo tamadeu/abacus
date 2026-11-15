@@ -124,8 +124,8 @@ Limitações conhecidas:
   no Abacus) as que usam agrupamento, valores distintos, "só os primeiros N"
   ou ordem por valor, ou cuja origem tenha título de coluna em branco. O
   LibreOffice ignora campos calculados. Não testado no Excel de verdade. Cada
-  criação ou alteração é um passo só no desfazer; desfazer a criação remove a
-  tabela, mas desfazer uma alteração não restaura o painel até atualizar. Não
+  criação ou alteração é um passo só no desfazer, e desfazer ou refazer
+  devolve também a definição da tabela. Não
   acompanham linhas e colunas inseridas e não podem ficar sobre os dados de
   origem nem sobre outra tabela. Ainda não há segmentação de dados, expandir e
   recolher grupos, nem detalhar uma célula.
