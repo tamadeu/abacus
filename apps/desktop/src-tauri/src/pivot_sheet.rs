@@ -49,6 +49,25 @@ fn chart_area(at: Range, grid: &Grid) -> Option<Range> {
     })
 }
 
+/// Os nomes das séries: para cada coluna de dados, o título mais baixo que ela tem
+/// (o do valor, se houver vários; senão o do item da coluna).
+fn chart_names(grid: &Grid) -> Vec<String> {
+    let first = grid.page_rows;
+    let last = grid.page_rows + grid.header_rows;
+    let cols = grid.col_roles.iter().skip(grid.label_cols).take_while(|r| **r == Role::Body).count();
+    (grid.label_cols..grid.label_cols + cols)
+        .map(|col| {
+            (first..last)
+                .rev()
+                .find_map(|row| match grid.cells.get(row).and_then(|r| r.get(col)) {
+                    Some(Out::Text(text)) => Some(text.clone()),
+                    _ => None,
+                })
+                .unwrap_or_default()
+        })
+        .collect()
+}
+
 fn grid_text(grid: &Grid) -> String {
     grid.cells
         .iter()
@@ -201,6 +220,7 @@ impl Engine {
         pivot.width = width as u32;
         pivot.height = height as u32;
         pivot.chart_area = chart_area(at, &grid);
+        pivot.chart_names = chart_names(&grid);
         // Deixa a seleção na tabela.
         let (r, c) = to_ironcalc(at.col, at.row)?;
         self.select(pivot.sheet, r, c, r, c)?;
@@ -289,6 +309,7 @@ impl Engine {
         let range = pivot.chart_area.ok_or("a tabela não tem dados para um gráfico")?;
         let mut view = self.add_chart(pivot.sheet, kind, range)?;
         view.chart.opts.pivot = Some(id);
+        view.chart.opts.names.clone_from(&pivot.chart_names);
         // A posição fica ao lado da tabela inteira, não só dos dados.
         let from_col = (pivot.col + pivot.width + 1).min(MAX_COLS as u32 - 8);
         view.chart.from_col = from_col;
@@ -304,6 +325,7 @@ impl Engine {
         let Some(range) = pivot.chart_area else { return };
         for chart in self.charts.iter_mut().filter(|c| c.opts.pivot == Some(pivot.id)) {
             chart.range = range;
+            chart.opts.names.clone_from(&pivot.chart_names);
         }
     }
 

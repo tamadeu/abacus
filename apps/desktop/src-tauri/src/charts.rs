@@ -105,6 +105,9 @@ pub struct ChartOptions {
     /// Tabela dinâmica que alimenta o gráfico: o intervalo acompanha a tabela.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pivot: Option<u32>,
+    /// Nomes das séries quando não vêm da primeira linha dos dados (gráfico de tabela dinâmica).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub names: Vec<String>,
 }
 
 impl Default for ChartOptions {
@@ -121,6 +124,7 @@ impl Default for ChartOptions {
             smooth: false,
             styles: Vec::new(),
             pivot: None,
+            names: Vec::new(),
         }
     }
 }
@@ -303,8 +307,14 @@ fn layout(range: Range, scatter: bool, cell: &impl Fn(u32, u32) -> CellInfo) -> 
 }
 
 /// As categorias e séries de um intervalo.
-pub fn build_data(range: Range, scatter: bool, cell: impl Fn(u32, u32) -> CellInfo) -> ChartData {
-    let layout = layout(range, scatter, &cell);
+/// As categorias e séries de um intervalo. `fixed` diz que a primeira linha e a primeira coluna são
+/// sempre títulos e categorias (o que vale para o intervalo de uma tabela dinâmica).
+pub fn build_data(range: Range, scatter: bool, fixed: bool, cell: impl Fn(u32, u32) -> CellInfo) -> ChartData {
+    let layout = if fixed {
+        Layout { categories: range.cols >= 2, header: range.rows >= 2 }
+    } else {
+        layout(range, scatter, &cell)
+    };
     let first_row = range.row + u32::from(layout.header);
     let last_row = range.row + range.rows;
     let first_col = range.col + u32::from(layout.categories);
@@ -330,7 +340,12 @@ pub fn build_data(range: Range, scatter: bool, cell: impl Fn(u32, u32) -> CellIn
 
 /// Os dados de um gráfico, já com as linhas de tendência pedidas.
 pub fn data_for(chart: &Chart, cell: impl Fn(u32, u32) -> CellInfo) -> ChartData {
-    let mut data = build_data(chart.range, chart.kind == ChartKind::Scatter, cell);
+    let mut data = build_data(chart.range, chart.kind == ChartKind::Scatter, chart.opts.pivot.is_some(), cell);
+    if chart.opts.names.len() == data.series.len() {
+        for (series, name) in data.series.iter_mut().zip(&chart.opts.names) {
+            series.name.clone_from(name);
+        }
+    }
     for (index, series) in data.series.iter_mut().enumerate() {
         let Some(trend) = chart.style(index).trend else { continue };
         let points: Vec<(f64, f64)> =

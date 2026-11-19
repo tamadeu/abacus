@@ -179,6 +179,9 @@ pub struct Pivot {
     /// Parte da grade que um gráfico usa: títulos e itens, sem totais.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub chart_area: Option<crate::engine::Range>,
+    /// Os nomes das séries desse gráfico, tirados dos títulos das colunas.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub chart_names: Vec<String>,
 }
 
 /// Uma célula lida da origem.
@@ -1000,6 +1003,7 @@ mod tests {
             width: 0,
             height: 0,
             chart_area: None,
+            chart_names: Vec::new(),
         }
     }
 

@@ -572,6 +572,7 @@ impl Engine {
         // Trocar os dados à mão solta o gráfico da tabela dinâmica.
         if old.range != chart.range {
             chart.opts.pivot = None;
+            chart.opts.names.clear();
         }
         self.open_undo_step()?;
         if let Some(slot) = self.charts.iter_mut().find(|c| c.id == chart.id) {
@@ -3010,6 +3011,7 @@ mod tests {
             width: 0,
             height: 0,
             chart_area: None,
+            chart_names: Vec::new(),
         }
     }
 
@@ -3184,6 +3186,7 @@ mod tests {
         assert_eq!(first.rows, pivot.chart_area.unwrap().rows);
         assert!(first.rows < pivot.height);
         assert_eq!(view.data.series.len(), 1);
+        assert_eq!(view.data.series[0].name, "Soma de Vendas");
 
         let mut wider = pivot.clone();
         wider.cols = pv(&[], &["Produto"]).cols;
@@ -3192,6 +3195,9 @@ mod tests {
         assert!(after.chart.range.cols > first.cols);
         assert_eq!(after.chart.opts.pivot, Some(pivot.id));
 
+        // Com um campo em colunas, as séries levam o nome dos itens, não "Série n".
+        let names: Vec<String> = e.charts(0)[0].data.series.iter().map(|s| s.name.clone()).collect();
+        assert_eq!(names, ["A", "B"]);
         e.undo().unwrap();
         assert_eq!(e.charts(0)[0].chart.range, first);
 
